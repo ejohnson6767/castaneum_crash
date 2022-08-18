@@ -1,0 +1,299 @@
+---
+title: "castaneum models for egg production"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# load libs and data
+```{r}
+library(here)
+library(tidyverse)
+library(cmdstanr)
+library(shinystan)
+library(loo)
+library(rstan)
+source(here('stan_utility.R'))
+# optimize stan 
+rstan_options(auto_write = TRUE)
+Sys.setenv(LOCAL_CPPFLAGS = '-march=corei7 -mtune=corei7')
+# read in data
+dat <- read.csv(here("all_data_castaneum_crash.csv"))
+
+```
+
+setup MCMC parameters for all datasets
+```{r}
+# MCMC params
+warmup <- 2000
+iter <- 2000
+chains <- 2
+cores <- 2
+thin <- 1
+adapt_delta <- 0.99
+max_treedepth <- 10
+refresh <- 100
+seed <- 20
+```
+
+
+# dataset 1
+
+Select dataset 1, subset to exclude replicates that represent population crashes
+```{r}
+# subset
+dat1 <- dat %>%
+  filter(exp_name %in% c("cc_cold"), 
+         nt > 0,
+         chaff_presence == 0 | ntp1 > 500) %>%
+  select(nt, ntp1, oviposition_days, exp_name) %>%
+  na.omit()
+
+dat1 <- dat %>%
+  filter(exp_name %in% c("cc_cold"), 
+         nt > 0) %>%
+  select(nt, ntp1, oviposition_days, exp_name) %>%
+  na.omit()
+
+# sample size
+dat1 %>% nrow()
+  
+# plot to make sure that the data doesn't contain population crashes
+dat1 %>%
+ggplot( aes(x = nt, y = ntp1)) + 
+  geom_point() + 
+  facet_wrap(~exp_name, scales = "free")
+
+```
+
+compile models
+```{r}
+mods <- list()
+for(i in 1:11)
+{
+  mods[[i]] <- cmdstan_model(here(paste0("models/mod", i, "_D1.stan")))
+  cat("model", i, "compiled\n")
+}
+```
+
+fit models
+```{r}
+# list of prior scales for the parameters of all models
+stan_data <- list(N = NROW(dat1),
+                  nt = dat1$nt,
+                  ntp1 = dat1$ntp1,
+                  ovi_period = dat1$oviposition_days,
+                  m_scale = 200,
+                  beta0_loc = 0,
+                  beta0_scale = 0.05,
+                  rho_loc = 0,
+                  rho_scale = 1,
+                  eta_alpha_loc = 0,
+                  eta_alpha_scale = 10,
+                  eta_beta_loc = 0,
+                  eta_beta_scale = 0.01,
+                  sigma_alpha_loc = 0,
+                  sigma_alpha_scale = 10,
+                  gamma_alpha_loc = 0,
+                  gamma_alpha_scale = 10
+                  )
+
+
+for(i in 1:11)
+{
+fit <- mods[[i]]$sample(data = stan_data, 
+                   iter_warmup = warmup, 
+                   iter_sampling = iter,
+                   chains = chains,
+                   parallel_chains = cores,
+                   adapt_delta = adapt_delta,
+                   max_treedepth = max_treedepth, 
+                   refresh = refresh,
+                   seed = seed)
+
+sfit<- rstan::read_stan_csv(fit$output_files())
+saveRDS(sfit, file = here(paste0("model_fits/sfit", i, "_D1.rds")))
+}
+
+
+# for(i in 1:11)
+# {
+# 
+# sfit<- readRDS(file = here(paste0("model_fits/sfit", i, "_D3_test.rds")))
+# 
+# saveRDS(sfit, file = here(paste0("model_fits/sfit", i, "_D3.rds")))
+# }
+
+```
+
+
+# dataset 2
+
+Select dataset 2, subset to exclude replicates that represent population crashes
+```{r}
+dat2 <- dat %>%
+  filter(exp_name %in% c("castaneum_chaos", "storing_sex_A"), 
+         temp > 25, 
+         nt > 0,
+         nt < 25 | (nt > 25 & ntp1 > 125),
+         !(nt==5 & oviposition_days == 1 & ntp1 > 125)) %>%
+  select(nt, ntp1, oviposition_days, exp_name) %>%
+  na.omit()
+
+# dat2 <- dat %>%
+#   filter(exp_name %in% c("castaneum_chaos", "storing_sex_A"), temp > 25, nt > 0) %>%
+#   filter(!(chaff_presence == 1 | maybe_chaff_presence == 1)) %>%
+#   select(nt, ntp1, oviposition_days, exp_name) %>%
+#   na.omit()
+
+# sample size
+dat2 %>% nrow()
+  
+# plot to make sure that the data doesn't contain population crashes
+dat2 %>%
+ggplot( aes(x = nt, y = ntp1)) + 
+  geom_point() + 
+  facet_wrap(~exp_name, scales = "free")
+
+dat2 %>%
+ggplot( aes(x = nt, y = ntp1)) + 
+  geom_point() + 
+  facet_wrap(~oviposition_days, scales = "free")
+
+dat2 %>%
+ggplot( aes(x = nt, y = ntp1)) + 
+  geom_point()
+
+```
+
+compile models
+```{r}
+mods <- list()
+for(i in 1:11)
+{
+  mods[[i]] <- cmdstan_model(here(paste0("models/mod", i, "_D2.stan")))
+  cat("model", i, "compiled\n")
+}
+```
+
+fit models
+```{r}
+# list of prior scales for the parameters of all models
+stan_data <- list(N = NROW(dat2),
+                  nt = dat2$nt,
+                  ntp1 = dat2$ntp1,
+                  ovi_period = dat2$oviposition_days,
+                  m_scale = 200,
+                  beta0_loc = 0,
+                  beta0_scale = 0.05,
+                  beta1_loc = 0,
+                  beta1_scale = 0.00001,                  
+                  rho_loc = 0,
+                  rho_scale = 1,
+                  eta_alpha_loc = 0,
+                  eta_alpha_scale = 10,                
+                  eta_beta_loc = 0,
+                  eta_beta_scale = 0.01,
+                  sigma_alpha_loc = 0,
+                  sigma_alpha_scale = 10,
+                  gamma_alpha_loc = 0,
+                  gamma_alpha_scale = 10
+                  )
+
+
+for(i in 1:11)
+{
+fit <- mods[[i]]$sample(data = stan_data, 
+                   iter_warmup = warmup, 
+                   iter_sampling = iter,
+                   chains = chains,
+                   parallel_chains = cores,
+                   adapt_delta = adapt_delta,
+                   max_treedepth = max_treedepth, 
+                   refresh = refresh,
+                   seed = seed)
+
+sfit<- rstan::read_stan_csv(fit$output_files())
+saveRDS(sfit, file = here(paste0("model_fits/sfit", i, "_D2.rds")))
+}
+
+```
+
+# dataset 3
+
+Select dataset 3, subset to exclude replicates that represent population crashes
+```{r}
+# filters exclude population crashes
+dat3 <- dat %>%
+  filter(exp_name %in% c("corridor"), 
+         nt > 0,
+         nt < 60,
+         nt < 20 | ntp1 > 375) %>%
+  select(nt, ntp1, oviposition_days, exp_name) %>%
+  na.omit()
+
+# sample size
+dat3 %>% nrow()
+  
+# plot to make sure that the data doesn't contain population crashes
+dat3 %>%
+ggplot( aes(x = nt, y = ntp1)) + 
+  geom_point() + 
+  facet_wrap(~exp_name, scales = "free")
+
+```
+
+The models for dataset 1 work for dataset 3.
+```{r}
+mods <- list()
+for(i in 1:11)
+{
+  mods[[i]] <- cmdstan_model(here(paste0("models/mod", i, "_D1.stan")))
+  cat("model", i, "compiled\n")
+}
+```
+
+fit models
+```{r}
+# list of prior scales for the parameters of all models
+stan_data <- list(N = NROW(dat3),
+                  nt = dat3$nt,
+                  ntp1 = dat3$ntp1,
+                  ovi_period = dat3$oviposition_days,
+                  m_scale = 200,
+                  beta0_loc = 0,
+                  beta0_scale = 0.05,
+                  rho_loc = 0,
+                  rho_scale = 1,
+                  eta_alpha_loc = 0,
+                  eta_alpha_scale = 10,           
+                  eta_beta_loc = 0,
+                  eta_beta_scale = 0.01,
+                  sigma_alpha_loc = 0,
+                  sigma_alpha_scale = 10,
+                  gamma_alpha_loc = 0,
+                  gamma_alpha_scale = 10
+                  )
+
+
+for(i in 1:11)
+{
+fit <- mods[[i]]$sample(data = stan_data, 
+                   iter_warmup = warmup, 
+                   iter_sampling = iter,
+                   chains = chains,
+                   parallel_chains = cores,
+                   adapt_delta = adapt_delta,
+                   max_treedepth = max_treedepth, 
+                   refresh = refresh,
+                   seed = seed)
+
+sfit<- rstan::read_stan_csv(fit$output_files())
+saveRDS(sfit, file = here(paste0("model_fits/sfit", i, "_D3.rds")))
+}
+
+```
+

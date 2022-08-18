@@ -1,0 +1,637 @@
+# setup
+```{r}
+# load packages
+library(here)
+library(tidyverse)
+library(HDInterval)
+library(RColorBrewer)
+library(cmdstanr)
+library(shinystan)
+library(rstan)
+library(bayesplot)
+
+# load data and R scripts
+all_dat <- read.csv(here("all_data_castaneum_crash.csv")) %>% drop_na(nt, ntp1)
+source(here("support_functions.R")) # contains various user-defined functions, including "rnormt", random sampling from a truncated normal
+source(here("stan_utility.R")) # for MCMC diagnostics
+
+# plotting parameters
+axis_title_size <- 24
+axis_text_size <- 14
+legend_title_size <- 24
+legend_text_size <- 22
+title_size <- 24
+```
+
+# select dataset 2
+Also, subset so that oviposition days ~ 7.
+```{r}
+# subset 
+dat <- all_dat %>%
+  filter(exp_name %in% c("castaneum_chaos", "storing_sex_A"),
+        oviposition_days >= 7) %>% 
+  select(nt, ntp1, oviposition_days, exp_name, chaff_presence)
+# the oviposition period was slightly longer than 7 days for the "castaneum_chaos" experiment, hence the >= 7. Aggregating data with two different oviposition periods is justifiable because the oviposition periods are very similar (7.083 vs 7.0).
+
+# sample size
+dat %>% nrow()
+
+# plot to make sure we subsetted the data correctly
+dat %>%
+ggplot( aes(x = nt, y = ntp1, color = as.factor(chaff_presence))) + 
+  geom_point() + 
+  facet_wrap(~exp_name, scales = "free")
+```
+
+
+# simulation function
+```{r}
+sim<- function(pars, input_dat)
+{
+  # prep
+  nt <- input_dat[["nt"]]
+  oviposition_days <- input_dat[["oviposition_days"]]
+  theta_L <- pars[["theta_L"]]
+  epsilon_H <- pars[["epsilon_H"]]
+  epsilon_L = sqrt((1-theta_L)*theta_L)
+
+  N <- length(nt)
+  # finite population sex ratio sampling
+  ft <- rnormt(N, range = c(0, Inf), m = nt/2, s = sqrt(nt)/2)
+
+  # mu_zStarReal is the mean die-off threshold 
+  mu_zStarReal <-  pars[["gamma0"]] - pars[["gamma1"]] * nt
+
+  # z_star is the actual die-off threshold for a single replicate  
+  z_star <- rnorm(N, mean = mu_zStarReal, sd = pars[["sigma_zStar"]])
+  
+  # calculate moments of eggs distribution
+  beta = pars[["beta0"]] + pars[["beta1"]] * nt
+  mu_zt = pars[["mu_alpha"]] * (1-exp(- ft * oviposition_days * beta)) / beta
+  sigma_zt = pars[["eta_alpha"]] * sqrt( (1- exp(-2 * ft * oviposition_days * beta)) / (2 * beta))
+  
+  #simulate eggs
+  zt <- rnormt(N, range = c(0, Inf), m = mu_zt, s = sigma_zt)
+
+  # simulate n(t+1) aka ntp1
+  mu_theta <- theta_L  - theta_L/(1 + exp(-(6/pars[["thresh_length"]]) * (zt - z_star)))
+  sigma_theta <- (epsilon_L)  -  (epsilon_L - epsilon_H)/(1 + exp(-(6/pars[["thresh_length"]]) * (zt - z_star)))
+  ntp1 <- rnormt(N, range = c(0, Inf), m = zt*mu_theta, s = sqrt(zt) * sigma_theta)
+
+  return(ntp1)
+}
+```
+
+# tune initial guesses of parameter values: multi-modal HDPrI
+```{r}
+# read in the submodel fit. The marginal posterior means can be used to help find initial conditions for the markov chains of the full model
+sfit <- readRDS(file = here("model_fits/sfit1_D2.rds"))
+pars <- c("m", "mu_alpha", "beta0", "eta_alpha")
+# pairs(sfit, pars = pars)
+fit_summary <- summary(sfit)
+post_means <- fit_summary$summary[pars,"mean"]
+
+# initial parameter guesses
+init_pars <- tibble(
+  mu_alpha = 15,
+  beta0 = 0.04,
+  beta1 = 1.5e-5,
+  eta_alpha = 18,
+  thresh_length = 50,
+  gamma0 = 500,
+  gamma1 = 0.2,
+  sigma_zStar = 10,
+  epsilon_H = 1,
+  theta_L = 0.91
+)
+
+# simulation / predictive-interval parameters
+sim_reps <- 10000
+nt_max <- dat %>% select(nt) %>% max() # the biggest initial abundance in the dataset
+x <- seq(4, round(nt_max*1.1), by = 5) # unique hypothetical initial abundances to simulate from
+N <- length(x) # number of unique hypothetical initial population abundances to simulate from
+oviposition_days <- 7 # length of the oviposition period in days
+theta_L <- 0.91 # egg-to-adult survival probability when there are few eggs
+inner_perc <- 0.50 # the percentile for the inner predictive interval
+outer_perc <- 0.99 # the percentile for the outer predictive interval
+
+
+# pre-allocate predictive interval info
+band_dat <- data.frame(x = x,
+                       y_m = numeric(N),
+                       inner_band1_lower = numeric(N),
+                       inner_band1_upper = numeric(N),
+                       inner_band2_lower = numeric(N),
+                       inner_band2_upper = numeric(N),                       
+                       outer_band1_lower = numeric(N),
+                       outer_band1_upper = numeric(N),
+                       outer_band2_lower = numeric(N),
+                       outer_band2_upper = numeric(N))
+
+# loop through initial population abundance, x[i]
+for(i in 1:N)
+{
+  input_dat <- list(nt = rep(x[i], sim_reps), oviposition_days = oviposition_days) # setup input data for simulations
+  y <- sim(init_pars, input_dat) # run simulations
+  dens <- density(y, bw=5) # density kernel estimation
+  band_dat$y_m[i] <- mean(y) # record the mean y = n(t+1)
+  hdi <- hdi(dens, y, credMass = outer_perc, allowSplit=TRUE) # create high density interval, for the outer (i.e., large) interval
+  #if there is more than one region of high density, record the endpoints of each interval
+    if(nrow(hdi) > 1)
+    {
+      band_dat$outer_band1_lower[i] <- hdi[,"begin"][[1]]
+      band_dat$outer_band1_upper[i] <- hdi[,"end"][[1]]
+      band_dat$outer_band2_lower[i] <- hdi[,"begin"][[nrow(hdi)]]
+      band_dat$outer_band2_upper[i] <- hdi[,"end"][[nrow(hdi)]]
+    } else
+    {
+      band_dat$outer_band1_lower[i] <- hdi[,"begin"][[1]]
+      band_dat$outer_band1_upper[i] <- hdi[,"end"][[1]]
+      band_dat$outer_band2_lower[i] <- hdi[,"begin"][[1]]
+      band_dat$outer_band2_upper[i] <- hdi[,"end"][[1]]
+    }
+  
+    # create high density interval, for the inner 50% interval
+    hdi <- hdi(dens, y, credMass = inner_perc, allowSplit=TRUE)
+    if(nrow(hdi) > 1)
+    {
+      band_dat$inner_band1_lower[i] <- hdi[,"begin"][[1]]
+      band_dat$inner_band1_upper[i] <- hdi[,"end"][[1]]
+      band_dat$inner_band2_lower[i] <- hdi[,"begin"][[nrow(hdi)]]
+      band_dat$inner_band2_upper[i] <- hdi[,"end"][[nrow(hdi)]]
+    } else
+    {
+      band_dat$inner_band1_lower[i] <- hdi[,"begin"][[1]]
+      band_dat$inner_band1_upper[i] <- hdi[,"end"][[1]]
+      band_dat$inner_band2_lower[i] <- hdi[,"begin"][[1]]
+      band_dat$inner_band2_upper[i] <- hdi[,"end"][[1]]
+    }
+}
+
+band_dat[which(band_dat < 0, arr.ind =TRUE)] <- 0 # left interval endpoint can't be less than zero.
+
+# data for drawing the mean number of eggs (approximating larvae) and the die-off threshold
+line_dat <- expand_grid(x = x, init_pars) %>%
+    mutate(beta = beta0 + x * beta1,
+           eggs = (mu_alpha/beta)*(1-exp(-(x/2) * beta * oviposition_days))) %>%
+  group_by(x) %>% 
+  summarize(mean_larvae = 0.91*mean(eggs),
+            mean_thresh = 0.91*mean(gamma0 - gamma1 * x)) %>% 
+  pivot_longer(cols = c("mean_larvae", "mean_thresh"), names_to = "Average", values_to = "value") %>%
+  mutate(Average = fct_recode(Average, "Larvae" = "mean_larvae", "Larval die-off\nthreshold" = "mean_thresh"))
+
+
+# mean and sd (across the posterior) of the scaled average distance to a population crash
+dist_dat <- init_pars %>%
+  mutate( sd_eggs = eta_alpha/sqrt(2*beta0),
+    dist = ((gamma0 + thresh_length/2) - (mu_alpha/beta0)) / sqrt(sd_eggs^2 + sigma_zStar)) %>%
+  summarize(mean_dist = mean(dist),
+            sd_dist = sd(dist))
+
+# create  color palette 
+reds <- brewer.pal(9, "Reds")
+
+# make the plot
+panel <- ggplot(data = band_dat) + 
+  geom_ribbon(data = band_dat, mapping = aes(x = x, ymin = outer_band2_lower, ymax = outer_band2_upper, fill = reds[2]),  inherit.aes = FALSE) +
+  geom_ribbon(data = band_dat, mapping = aes(x = x, ymin = outer_band1_lower, ymax = outer_band1_upper, fill = reds[2]),  inherit.aes = FALSE) +
+  geom_ribbon(data = band_dat, mapping = aes(x = x, ymin = inner_band1_lower, ymax = inner_band1_upper, fill = reds[3]),  inherit.aes = FALSE) + 
+    geom_ribbon(data = band_dat, mapping = aes(x = x, ymin = inner_band2_lower, ymax = inner_band2_upper, fill = reds[3]),  inherit.aes = FALSE) + 
+  geom_point(data = dat %>% filter(oviposition_days >= 7), mapping = aes(x = nt, y = ntp1)) +
+ scale_fill_identity(name = 'HPrDI', guide = 'legend',labels = c(paste0(round(100*inner_perc),"%"), paste0(round(100*outer_perc),"%"))) +
+  geom_line(data = line_dat, inherit.aes =FALSE, mapping = aes(x = x, y = value, group = Average, color = Average), lwd = 2) +
+  scale_color_manual(name = "Average...", values=c("#9932CC", "#00AFBB")) + 
+  guides(col = guide_legend(order = 2), fill = guide_legend(order = 1)) +
+  coord_cartesian(ylim = c(0,1.1 * max(dat$ntp1)))  +
+  scale_x_continuous(trans = 'log2', breaks = 2^seq(1,10))  +
+  theme_classic() + 
+  theme(plot.title = element_text(size = title_size, hjust = 0.5, margin = margin(b = -20)),
+        legend.text=element_text(size=legend_text_size),
+        legend.title=element_text(size=legend_title_size),
+        axis.text = element_text(size = axis_text_size),
+        axis.title = element_blank(),
+        legend.key.size = unit(2,"line")) +
+      ggtitle(as.expression(bquote(.(round(dist_dat[["mean_dist"]], digits = 1)) %+-% .(round(2*dist_dat[["sd_dist"]], digits = 1)))))
+panel
+```
+
+# full stochastic model
+```{r}
+
+write('
+      data {
+      //// proper data
+      int <lower = 1> N; // number of total data
+      vector <lower = 0>[N] nt; // adult beetles at generation t
+      vector <lower = 0>[N] ntp1; // adult beetles at generation t+1
+      vector<lower = 0>[N] ovi_period; // length of the oviposition period in days
+      real <lower = 0, upper = 1> theta_L; // survival probability when there are few eggs. 
+      
+      //// specifications for prior distributions
+      real <lower = 0> m_scale;
+      real <lower = 0> beta0_scale;
+      real <lower = 0> beta1_scale;
+      real <lower = 0> eta_alpha_scale;
+      real <lower = 0> thresh_length_scale;
+      real <lower = 0> gamma0_loc;
+      real <lower = 0> gamma0_scale;
+      real <lower = 0> gamma1_scale;
+      real <lower = 0> sigma_zStar_scale;
+      real <lower = 0> epsilon_H_scale;
+      
+      }
+      
+      transformed data{
+      real <lower = 0> epsilon_L = sqrt(theta_L * (1-theta_L));
+      }
+      
+      parameters {
+      real <lower = 0> m; // parameter m = mu_alpha / beta0. The parameters mu_alpha and beta0 are highly correlated in posterior sampling, leading to divergences. The reparameterization to m prevents this
+      real <lower = 0> beta0; // effective cannibalism rate intercept
+      real <lower = 0> beta1; // effective cannibalism rate slope
+      real <lower = 0> eta_alpha; // scale of demographic stochasticity in oviposition rates
+      real <lower = 0> thresh_length; // length of the threshold for die-offs, i.e., the number of eggs that are needed to cover 90% of the distance between theta_L and 0. Solve 1 - 1/(1 + Exp[-k (thresh_range/2)]) = 0.9 for k, then k = 5.8888 / thresh_range.
+      real <lower = 0> gamma0; // the intercept of the die-off threshold
+      real <lower = 0> gamma1; // the slope of the die-off threshold
+      real <lower = 0> sigma_zStar; // the scale of variation in die-off thresholds from replicate-to-replicate.
+      vector<lower = 0>[N] ft; // number of females 
+      vector<lower = 0>[N] zt; // number of eggs
+      vector[N] zStar_raw;
+      real <lower = 0> epsilon_H; // the per capita scale of fluctuations in n(t+1) when  the number of eggs far exceeds the die-off threshold.
+      }
+      
+      transformed parameters {
+      //// declarations
+      real <lower = 0> mu_alpha; // the population-level mean oviposition rate (per adult)
+      vector<lower = 0>[N] beta; // the effective cannibalism rate
+      vector[N] mu_zStar; // the average die-off threshold
+      vector<lower = 0>[N] mu_zt; // the average number of eggs for a given replicate
+      vector<lower = 0>[N] sigma_zt; // the standard deviation in the number of eggs for a given replicate
+      vector<lower = 0>[N] mu_ntp1; // the average number of adults (i.e., n(t+1)) for a given replicate
+      vector<lower = 0>[N] sigma_ntp1;  // the standard deviation in the number of adults (i.e., n(t+1)) for a given replicate
+      vector[N] focal_exponent; // intermediate quantity, saved for convenience.
+      vector[N] zStar; // the die-off threshold; the number of eggs required so that egg-to-adult survival is theta_L / 2
+      vector[N] mu_theta; // the average egg-to-adult survival probability
+      vector[N] sigma_theta; // the scale of fluctuations in egg-to-adult survival probability when there are many eggs.
+     
+      //// transformations
+      
+      mu_alpha = m * beta0; // the oviposition rate
+      beta = beta0 + nt * beta1; // effective cannibalism rate
+      mu_zStar =  gamma0 - gamma1*nt; // the average die-off threshold
+      zStar = mu_zStar + sigma_zStar * zStar_raw;
+
+      // adult-to-egg model
+      focal_exponent = ft .* ovi_period .* beta; // useful intermediate quantity
+      mu_zt = mu_alpha * (1-exp(-focal_exponent)) ./ beta; // average number of eggs
+      sigma_zt = eta_alpha * sqrt( (1- exp(-2 * focal_exponent)) ./ (2 * beta)); // the standard deviation in the number of eggs
+      
+      // egg-to-adult (n(t+1)) model
+      mu_theta = theta_L - (theta_L) * pow(1 + exp(-(5.8889/thresh_length)* (zt - zStar)), -1); // the average per capita egg-to-adult survival probability
+      sigma_theta = epsilon_L - (epsilon_L - epsilon_H) * pow(1 + exp(-(5.8889/thresh_length)* (zt - zStar)), -1); // the average per capita fluctuation in egg-to-adult dynamics
+      
+      mu_ntp1 =  mu_theta .* zt; // average adults at generation t+1
+      sigma_ntp1 = sigma_theta .* sqrt(zt); // standard deviation in the number of adults at generation t+1
+
+      }
+      
+      model {
+      // priors  
+      epsilon_H ~ normal(0, epsilon_H_scale);
+      m ~ normal(0, m_scale);
+      beta0 ~ normal(0, beta0_scale);
+      beta1 ~ normal(0, beta1_scale);
+      eta_alpha ~ normal(0, eta_alpha_scale);
+      thresh_length ~ normal(0, thresh_length_scale);
+      gamma0 ~ normal(gamma0_loc, gamma0_scale);
+      gamma1 ~ normal(0, gamma1_scale);
+      sigma_zStar ~ normal(0, sigma_zStar_scale);
+      zStar_raw ~ std_normal();
+
+      // likelihood (T[0,] indicates zero-truncation)
+      for(i in 1:N)
+      {
+      ft[i] ~ normal(0.5 * nt[i], 0.5 * sqrt(nt[i]))T[0,];
+      zt[i] ~ normal(mu_zt[i], sigma_zt[i])T[0,];
+      ntp1[i] ~ normal(mu_ntp1[i], sigma_ntp1[i])T[0,];
+      }
+      
+      }
+      ',
+        
+        here("mod1_full_D2.stan"))
+
+# compile stan model
+mod1_full_D2 <- cmdstan_model(here("mod1_full_D2.stan"))
+
+
+# data and prior information
+stan_data <- list(N = NROW(dat),
+                  nt = dat$nt,
+                  ntp1 = dat$ntp1,
+                  ovi_period = dat$oviposition_days,
+                  theta_L = 0.91,
+                  m_scale = 200,
+                  beta0_scale = 0.05,
+                  beta1_scale = 1e-5,
+                  eta_alpha_scale = 10,
+                  thresh_length_scale = 200,
+                  gamma0_loc = 500,
+                  gamma0_scale = 100,
+                  gamma1_scale = 0.2,
+                  sigma_zStar_scale = 20,
+                  epsilon_H_scale = 2
+                  )
+
+# initial parameter guesses
+# setup intial parameter guesses
+mu_alpha_init <- init_pars[["mu_alpha"]]
+beta0_init <- init_pars[["beta0"]]
+beta1_init <- init_pars[["beta1"]]
+eta_alpha_init <- init_pars[["eta_alpha"]]
+thresh_length_init <- init_pars[["thresh_length"]]
+gamma0_init <- init_pars[["gamma0"]]
+gamma1_init <- init_pars[["gamma1"]]
+sigma_zStar_init <- init_pars[["sigma_zStar"]]
+epsilon_H_init <- init_pars[["epsilon_H"]]
+
+# use intital parameter guesses to guess latent parameters (i.e., eggs, die-off thresholds)
+nt <- dat$nt
+ovi_period <- dat$oviposition_days
+beta = beta0_init + nt * beta1_init
+ft_init <- dat$nt / 2
+focal_exponent = ft_init * ovi_period * beta
+mu_zt = mu_alpha_init * (1-exp(-focal_exponent)) / beta
+zt_init <- mu_zt
+mu_zStar_init <-  gamma0_init - gamma1_init*(nt)
+crash_inds <- which(dat$nt > 25 & dat$ntp1 < 150) # indexes of replicates that experienced population crashes
+zt_init[crash_inds] <- mu_zStar_init[crash_inds] + 100 # set initial eggs above what is expected; this (hopefully) sets the eggs above the die-off threshold and (hopefully) allows us to avoid falling into the regions of the (multi-modal) posterior where eta_alpha is very large. 
+
+# function for MCMC initialization
+initf <-function(){list(m = m_init,
+                        beta0 = beta0_init,
+                        beta1 = beta1_init,
+                        eta_alpha = eta_alpha_init,
+                        thresh_length = thresh_length_init,
+                        gamma0 = gamma0_init,
+                        gamma1 = gamma1_init,
+                        sigma_zStar = sigma_zStar_init,
+                        zt = zt_init,
+                        zStar = rep(mu_zStar_init, length(zt_init)),
+                        epsilon_H = epsilon_H_init
+                        )}
+
+
+# MCMC params
+warmup <- 300
+iter <- 300
+chains <- 6
+cores <- 2
+thin <- 1
+adapt_delta <- 0.99
+max_treedepth <- 10
+refresh <- 1
+seed <- 20
+
+# fit model
+fit <- mod1_full_D2$sample(data = stan_data, 
+                   iter_warmup = warmup, 
+                   iter_sampling = iter,
+                   chains = chains,
+                   parallel_chains = cores,
+                   adapt_delta = adapt_delta,
+                   max_treedepth = max_treedepth, 
+                   refresh = refresh,
+                   seed = seed,
+                   init = initf)
+
+# save the posterior and metadata
+sfit <- rstan::read_stan_csv(fit$output_files())
+saveRDS(sfit, file = here("model_fits/sfit_full_D2.stan"))
+#sfit <- readRDS(file = here("model_fits/sfit_full_D2.stan"))
+```
+
+# compare chains
+Because the model is complex (it is a doubly-nested hierarchical model!), the markov chains do not always find the region of the posterior which we are targeting. Here we probe the individual chains with respect to the distribution of log posterior density, tree depth, acceptance rate, and divergences. We also look at pair plots to make sure the marginal posteriors are biologically plausible.
+```{r}
+# get all parameter names
+par_names <-   c("m", "beta0", "beta1", "eta_alpha", "thresh_length", "gamma0", "gamma1", "sigma_zStar", "epsilon_H", "lp__")
+
+# get all draws
+x <- as.array(sfit, pars = par_names)
+
+# look at logged posterior probabilities
+temp <- list()
+for(i in 1:dim(x)[2])
+{
+  temp[[i]] <- bind_cols(x[,i,], chain = i) 
+}
+df <- reduce(temp, bind_rows)
+df %>% 
+  rename(lp = "lp__") %>%
+  mutate(chain = as.factor(chain)) %>%
+  ggplot(aes(x = lp, group = chain, color = chain)) + 
+  geom_density() + 
+  facet_wrap(~ chain, scales = "free")
+
+
+# get diagnostic stats
+np <- nuts_params(sfit)
+
+# get rid of trailing underscores in parameter names
+np2 <- np %>%
+  mutate(Parameter = fct_relabel(Parameter, ~ str_replace(.x, pattern = "__", replacement = "")))
+np2$Parameter %>% unique() # look at stats
+
+# compare divergences across chains
+np2 %>% 
+  filter(Parameter == "divergent") %>%
+  group_by(Chain) %>%
+  summarize(perc_div = sum(Value)/n())
+  
+# compare treedepth across chains
+np2 %>% 
+  filter(Parameter == "treedepth") %>%
+  group_by(Chain) %>%
+  summarize(mean_depth = mean(Value),
+            sd_depth = sd(Value))
+
+# compare accept_stat across chains
+np2 %>% 
+  filter(Parameter == "accept_stat") %>%
+  group_by(Chain) %>%
+  summarize(mean_accept = mean(Value),
+            sd_accept = sd(Value))
+
+
+# pairs plots - explore which chains give plausible-looking posteriors
+par_names <- c("sigma_zStar", "thresh_length", "gamma0", "gamma1", "epsilon_H")
+par_names <- c("m", "mu_alpha", "beta0", "beta1", "eta_alpha")
+x <- as.array(sfit, pars = par_names)
+mcmc_pairs(x, condition = pairs_condition(chains = list(3, NULL)))
+
+# select the best chain(s)
+best_chain <- c(1,2,3,5,6)
+
+
+```
+
+
+# posterior contraction: look at prior influence
+```{r}
+# the scales of priors 
+prior_scales <- list(
+                  m = stan_data[["m_scale"]],
+                  beta0 = stan_data[["beta0_scale"]],
+                  beta1 = stan_data[["beta1_scale"]],
+                  eta_alpha = stan_data[["eta_alpha_scale"]],
+                  thresh_length = stan_data[["thresh_length_scale"]],
+                  gamma0 = stan_data[["gamma0_scale"]],
+                  gamma1 = stan_data[["gamma1_scale"]],
+                  sigma_zStar = stan_data[["sigma_zStar_scale"]],
+                  epsilon_H = stan_data[["epsilon_H_scale"]]
+                  )
+
+# function for the posterior contraction
+posterior_contraction <- function(prior_var, post_var)
+{
+  1 - post_var/prior_var
+}
+
+# names of all parameters whose posterior contractions we will be evaluating
+par_names <-   c("m", "beta0", "beta1", "eta_alpha", "thresh_length", "gamma0", "gamma1", "sigma_zStar", "epsilon_H")
+
+ld <- map(.x = best_chain,  ~ as_tibble(as.array(sfit, pars = par_names)[,.x,])) %>%
+  reduce(.f = bind_rows) 
+for(i in 1:length(par_names))
+{
+  post_var <- var(ld[,par_names[i]], na.rm = TRUE)
+  prior_var <- prior_scales[[par_names[i]]]^2
+  cat(par_names[i], "contraction is", posterior_contraction(prior_var, post_var),"\n")
+}
+
+```
+
+
+
+# plot simulated data
+```{r}
+# simulation / predictive-interval parameters
+best_chain <- 1:2
+sim_reps <- 10000
+nt_max <- dat %>% select(nt) %>% max() # the biggest initial abundance in the dataset
+x <- seq(4, round(nt_max*1.1), by = 1) # unique hypothetical initial abundances to simulate from
+N <- length(x) # number of unique hypothetical initial population abundances to simulate from
+oviposition_days <- 7 # length of the oviposition period in days
+theta_L <- 0.91 # egg-to-adult survival probability when there are few eggs
+inner_perc <- 0.50 # the percentile for the inner predictive interval
+outer_perc <- 0.90 # the percentile for the outer predictive interval
+
+# get a draw x parameter matrix of posterior samples
+par_names <- c("mu_alpha", "beta0", "beta1", "eta_alpha", "thresh_length", "gamma0", "gamma1", "sigma_zStar", "epsilon_H") # parameter names
+
+pars <- map(.x = best_chain,  ~ as_tibble(as.array(sfit, pars = par_names)[,.x,])) %>%
+  reduce(.f = bind_rows) %>% 
+  slice_sample(n = sim_reps, replace = T) %>%
+  mutate(theta_L = 0.91) 
+
+
+# pre-allocate predictive interval info
+band_dat <- data.frame(x = x,
+                       y_m = numeric(N),
+                       inner_band1_lower = numeric(N),
+                       inner_band1_upper = numeric(N),
+                       inner_band2_lower = numeric(N),
+                       inner_band2_upper = numeric(N),                       
+                       outer_band1_lower = numeric(N),
+                       outer_band1_upper = numeric(N),
+                       outer_band2_lower = numeric(N),
+                       outer_band2_upper = numeric(N))
+
+# loop through initial population abundance, x[i]
+for(i in 1:N)
+{
+  input_dat <- list(nt = rep(x[i], sim_reps), oviposition_days = oviposition_days) # setup input data for simulations
+  y <- sim(pars, input_dat) # run simulations
+  dens <- density(y, bw=5) # density kernel estimation
+  band_dat$y_m[i] <- mean(y) # record the mean y = n(t+1)
+  hdi <- hdi(dens, y, credMass = outer_perc, allowSplit=TRUE) # create high density interval, for the outer (i.e., large) interval
+  #if there is more than one region of high density, record the endpoints of each interval
+    if(nrow(hdi) > 1)
+    {
+      band_dat$outer_band1_lower[i] <- hdi[,"begin"][[1]]
+      band_dat$outer_band1_upper[i] <- hdi[,"end"][[1]]
+      band_dat$outer_band2_lower[i] <- hdi[,"begin"][[nrow(hdi)]]
+      band_dat$outer_band2_upper[i] <- hdi[,"end"][[nrow(hdi)]]
+    } else
+    {
+      band_dat$outer_band1_lower[i] <- hdi[,"begin"][[1]]
+      band_dat$outer_band1_upper[i] <- hdi[,"end"][[1]]
+      band_dat$outer_band2_lower[i] <- hdi[,"begin"][[1]]
+      band_dat$outer_band2_upper[i] <- hdi[,"end"][[1]]
+    }
+  
+    # create high density interval, for the inner 50% interval
+    hdi <- hdi(dens, y, credMass = inner_perc, allowSplit=TRUE)
+    if(nrow(hdi) > 1)
+    {
+      band_dat$inner_band1_lower[i] <- hdi[,"begin"][[1]]
+      band_dat$inner_band1_upper[i] <- hdi[,"end"][[1]]
+      band_dat$inner_band2_lower[i] <- hdi[,"begin"][[nrow(hdi)]]
+      band_dat$inner_band2_upper[i] <- hdi[,"end"][[nrow(hdi)]]
+    } else
+    {
+      band_dat$inner_band1_lower[i] <- hdi[,"begin"][[1]]
+      band_dat$inner_band1_upper[i] <- hdi[,"end"][[1]]
+      band_dat$inner_band2_lower[i] <- hdi[,"begin"][[1]]
+      band_dat$inner_band2_upper[i] <- hdi[,"end"][[1]]
+    }
+}
+
+band_dat[which(band_dat < 0, arr.ind =TRUE)] <- 0 # left interval endpoint can't be less than zero.
+
+# data for drawing the mean number of eggs (approximating larvae) and the die-off threshold
+line_dat <- expand_grid(x = x, pars) %>%
+    mutate(beta = beta0 + x * beta1,
+           eggs = (mu_alpha/beta)*(1-exp(-(x/2) * beta * oviposition_days))) %>%
+  group_by(x) %>% 
+  summarize(mean_larvae = 0.91*mean(eggs),
+            mean_thresh = 0.91*mean(gamma0 - gamma1 * x)) %>% 
+  pivot_longer(cols = c("mean_larvae", "mean_thresh"), names_to = "Average", values_to = "value") %>%
+  mutate(Average = fct_recode(Average, "Larvae" = "mean_larvae", "Larval die-off\nthreshold" = "mean_thresh"))
+
+# mean and sd (across the posterior) of the scaled average distance to a population crash
+dist_dat <- pars %>%
+  mutate( sd_eggs = eta_alpha/sqrt(2*beta0),
+    dist = ((gamma0 + thresh_length/2) - (mu_alpha/beta0)) / sqrt(sd_eggs^2 + sigma_zStar)) %>%
+  summarize(mean_dist = mean(dist),
+            sd_dist = sd(dist))
+
+# create  color palette 
+reds <- brewer.pal(9, "Reds")
+
+# make the plot
+panel <- ggplot(data = band_dat) + 
+  geom_ribbon(data = band_dat, mapping = aes(x = x, ymin = outer_band2_lower, ymax = outer_band2_upper, fill = reds[2]),  inherit.aes = FALSE) +
+  geom_ribbon(data = band_dat, mapping = aes(x = x, ymin = outer_band1_lower, ymax = outer_band1_upper, fill = reds[2]),  inherit.aes = FALSE) +
+  geom_ribbon(data = band_dat, mapping = aes(x = x, ymin = inner_band1_lower, ymax = inner_band1_upper, fill = reds[3]),  inherit.aes = FALSE) + 
+    geom_ribbon(data = band_dat, mapping = aes(x = x, ymin = inner_band2_lower, ymax = inner_band2_upper, fill = reds[3]),  inherit.aes = FALSE) + 
+  geom_point(data = dat %>% filter(oviposition_days >= 7), mapping = aes(x = nt, y = ntp1)) +
+ scale_fill_identity(name = 'HPrDI', guide = 'legend',labels = c(paste0(round(100*inner_perc),"%"), paste0(round(100*outer_perc),"%"))) +
+  geom_line(data = line_dat, inherit.aes =FALSE, mapping = aes(x = x, y = value, group = Average, color = Average), lwd = 2) +
+  scale_color_manual(name = "Average...", values=c("#9932CC", "#00AFBB")) + 
+  guides(col = guide_legend(order = 2), fill = guide_legend(order = 1)) +
+  coord_cartesian(ylim = c(0,1.1 * max(dat$ntp1)))  +
+  scale_x_continuous(trans = 'log2', breaks = 2^seq(1,10))  +
+  theme_classic() + 
+  theme(plot.title = element_text(size = title_size, hjust = 0.5, margin = margin(b = -20)),
+        legend.text=element_text(size=legend_text_size),
+        legend.title=element_text(size=legend_title_size),
+        axis.text = element_text(size = axis_text_size),
+        axis.title = element_blank(),
+        legend.key.size = unit(2,"line")) +
+      ggtitle(as.expression(bquote(.(round(dist_dat[["mean_dist"]], digits = 1)) %+-% .(round(2*dist_dat[["sd_dist"]], digits = 1)))))
+panel
+
+saveRDS(panel, file = here("figures/fig2_panelB.rds"))
+```

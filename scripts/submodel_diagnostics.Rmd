@@ -1,0 +1,166 @@
+
+# load packages and r script.
+```{r}
+library(here)
+library(tidyverse)
+library(cmdstanr)
+library(shinystan)
+library(loo)
+library(rstan)
+source(here('scripts/stan_utility.R'))
+# optimize stan 
+rstan_options(auto_write = TRUE)
+Sys.setenv(LOCAL_CPPFLAGS = '-march=corei7 -mtune=corei7')
+# read in data
+dat <- read.csv(here("all_data_castaneum_crash.csv"))
+
+```
+
+# general diagnostic tools
+```{r}
+sfit <- readRDS(file = here("model_fits/sfit1_D2.rds")) # specify model of choice
+pars <- c("mu_alpha", "beta0",  "eta_alpha") # specify parameters of choice
+
+sfit <- readRDS(file = here("model_fits/sfit5_D2.rds")) # specify model of choice
+pars <- c("mu_alpha", "beta0",  "eta_alpha", "sigma_alpha") # specify parameters of choice
+
+pairs(sfit, pars = pars) # pair plots
+
+launch_shinystan(as.shinystan(sfit)) # diagnostics tab for Monte Carlo error, Rhat
+
+# quick check on common diagnostics, alternative to shinystan
+source(here('stan_utility.R'))
+pars <- c("mu_alpha", "beta0",  "eta_alpha", "ft")
+check_all_diagnostics(sfit, pars)
+```
+
+# posterior contraction
+```{r}
+# the scales of priors of parameters from all models
+prior_scales <- list(
+                  m = 200,
+                  beta0 = 0.05,
+                  eta_alpha = 10,
+                  sigma_alpha = 10,
+                  eta_beta = 0.01,
+                  rho = 1,
+                  gamma_alpha = 10,
+                  beta1 = 0.00001                
+                  )
+
+# function for the posterior contraction
+posterior_contraction <- function(prior_var, post_var)
+{
+  1 - post_var/prior_var
+}
+
+# read in model descriptions
+description_vec <- readRDS(file = here("models/description_vec.rds"))
+potential_pars <- c("m", "beta0", "beta1", "eta_alpha", "sigma_alpha", "eta_beta", "rho", "gamma_alpha") # vector of all parameter names across all models
+
+# get all submodel fits
+fits <- list.files(path = here("model_fits/"))
+fits <- fits[str_starts(fits, pattern = "sfit")]
+subfits <- fits[!(grepl(pattern = "full", fits) | grepl(pattern = "surv", fits))]
+
+# for each model, print-off the posterior contractions of each parameter
+for(j in 1:length(subfits))
+{
+  mod_name <- subfits[j]
+fit <- readRDS(file = here(paste0("model_fits/", mod_name)))
+ld <- extract(fit)
+cur_pars <- names(ld)[names(ld) %in% potential_pars]
+mod_num <- substr(mod_name, start = 5, stop = 5) %>% as.numeric()
+cat("model name:", mod_name, "\n")
+cat("description:", description_vec[mod_num],"\n")
+for(i in 1:length(cur_pars))
+{
+  post_var <- var(ld[[cur_pars[i]]], na.rm = TRUE)
+  prior_var <- prior_scales[[cur_pars[i]]]^2
+  cat(cur_pars[i], "contraction is", posterior_contraction(prior_var, post_var),"\n")
+}
+cat("\n\n")
+}
+
+```
+
+
+
+# posterior contraction for a specific dataset
+```{r}
+# the scales of priors of parameters from all models
+prior_scales <- list(
+                  m = 200,
+                  beta0 = 0.05,
+                  eta_alpha = 10,
+                  sigma_alpha = 10,
+                  eta_beta = 0.01,
+                  rho = 1,
+                  gamma_alpha = 10,
+                  beta1 = 0.00001                
+                  )
+
+# function for the posterior contraction
+posterior_contraction <- function(prior_var, post_var)
+{
+  1 - post_var/prior_var
+}
+
+# read in model descriptions
+description_vec <- readRDS(file = here("models/description_vec.rds"))
+potential_pars <- c("m", "beta0", "beta1", "eta_alpha", "sigma_alpha", "eta_beta", "rho", "gamma_alpha") # vector of all parameter names across all models
+
+# get all submodel fits
+fits <- list.files(path = here("model_fits/"))
+fits <- fits[str_starts(fits, pattern = "sfit")]
+subfits <- fits[!(grepl(pattern = "full", fits) | grepl(pattern = "surv", fits))]
+
+# for each model, print-off the posterior contractions of each parameter
+for(j in 1:11)
+{
+fit <- readRDS(here(paste0("model_fits/sfit", j, "_D1_test.rds")))
+ld <- extract(fit)
+cur_pars <- names(ld)[names(ld) %in% potential_pars]
+mod_num <- j
+cat("model name:", j, "\n")
+cat("description:", description_vec[mod_num],"\n")
+for(i in 1:length(cur_pars))
+{
+  post_var <- var(ld[[cur_pars[i]]], na.rm = TRUE)
+  prior_var <- prior_scales[[cur_pars[i]]]^2
+  cat(cur_pars[i], "contraction is", posterior_contraction(prior_var, post_var),"\n")
+}
+cat("\n\n")
+}
+
+```
+
+
+# print off diagnostics for each model
+```{r}
+# read in model descriptions
+description_vec <- readRDS(file = here("models/description_vec.rds"))
+potential_pars <- c("m", "beta0", "beta1", "eta_alpha", "sigma_alpha", "eta_beta", "rho", "gamma_alpha") # vector of all parameter names across all models
+
+# get all submodel fits
+fits <- list.files(path = here("model_fits/"))
+fits <- fits[str_starts(fits, pattern = "sfit")]
+subfits <- fits[!(grepl(pattern = "full", fits) | grepl(pattern = "surv", fits))]
+
+# for each model, print-off the posterior contractions of each parameter
+for(j in 1:length(subfits))
+{
+  mod_name <- subfits[j]
+fit <- readRDS(file = here(paste0("model_fits/", mod_name)))
+ld <- extract(fit)
+cur_pars <- names(ld)[names(ld) %in% potential_pars]
+mod_num <- substr(mod_name, start = 5, stop = 5) %>% as.numeric()
+cat("model name:", mod_name, "\n")
+cat("description:", description_vec[mod_num],"\n")
+check_all_diagnostics(fit, cur_pars)
+cat("\n\n")
+}
+
+```
+
+

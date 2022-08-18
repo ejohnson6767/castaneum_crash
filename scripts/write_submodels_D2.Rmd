@@ -1,0 +1,1548 @@
+Write all models to the models/ folder. Also, write a vector of model descriptions to the models/ folder.
+
+The "D2" suffix following the model names indicates that these models were designed for dataset 2, where it clear (based on empirical one-generation population maps) that the effective cannibalism rate increases with initial population density. This is not evident in the subset of data (i.e., data with no population crashes) that we use to fit the sub-models, for both dataset 1 and 3. See the file write_submodels_D1.Rmd in the scripts/ folder. 
+
+load libs
+```{r}
+library(here)
+library(tidyverse)
+```
+
+# Model 1
+demographic stochasticity and sex ratio stoch
+```{r}
+
+mod1_description <- "demographic stochasticity (oviposition), sex-ratio stochasticity"
+
+write('
+     functions {
+     
+  real f(real ntp1, real nt, real ft, real ovi_period, real mu_alpha, real beta0, real beta1, real eta_alpha) {
+  
+  real beta = beta0 + nt * beta1;
+  real focal_exponent = ft * ovi_period * beta;
+  real mu_zt = mu_alpha * (1-exp(-focal_exponent)) / beta;
+  real sigma_zt = eta_alpha * sqrt( (1- exp(-2 * focal_exponent)) / (2 * beta));
+  real log_prob_nt_to_ft = normal_lpdf(ft | 0.5*nt, 0.5*sqrt(nt)) - normal_lccdf(0 | 0.5*nt, 0.5*sqrt(nt));
+  real log_prob_ft_to_ntp1 = normal_lpdf(ntp1 | 0.91*mu_zt, 0.91*sigma_zt) - normal_lccdf(0 | 0.91*mu_zt, 0.91*sigma_zt);
+  return(log_prob_nt_to_ft + log_prob_ft_to_ntp1);
+  }
+  
+  real get_simp_add_on(int index, int M)
+  {
+  real res;
+  if(index == 0 || index == M)
+  {
+  res = 0;
+  } else if(index % 2 == 0)
+  {
+  res = 0.6931472;
+  } else{
+  res = 1.386294;
+  }
+  return(res);
+  }
+  
+  real log_lik_Simpson_f(real ntp1, real nt, real ovi_period, real mu_alpha, real beta0, real beta1, real eta_alpha, int M) {
+    vector[M+1] lp; // M intervals implies M+1 partition points
+    real h; // delta x, i.e. interval length
+      real li = 0.5*nt - 4 * 0.5 * sqrt(nt);
+      real ui = 0.5*nt + 4 * 0.5 * sqrt(nt);
+      if(li < 0.5)
+      {
+        li = 0.5;
+      }
+    h = (ui - li)/M;
+    
+    for(m in 0:M)
+  {
+    lp[m + 1] = get_simp_add_on(m, M) + f(ntp1, nt, li + m * h, ovi_period, mu_alpha, beta0, beta1, eta_alpha);
+  }
+
+    return(log(h/3) + log_sum_exp(lp));
+  }
+  
+     }
+      data {
+      int <lower = 1> N; // number of total data
+      vector<lower = 0>[N] nt;
+      vector<lower = 0>[N] ntp1;
+      vector<lower = 0>[N] ovi_period;
+      
+
+      real <lower = 0> m_scale;
+      real <lower = 0> beta0_loc;
+      real <lower = 0> beta0_scale;
+      real <lower = 0> beta1_loc;
+      real <lower = 0> beta1_scale;
+      real <lower = 0> eta_alpha_loc;
+      real <lower = 0> eta_alpha_scale;
+      }
+      
+      parameters {
+      real <lower = 0> m_raw; 
+      real <lower = 0> beta0_raw; // cannibalism rate intercept (per adult, per egg)
+      real <lower = 0> beta1_raw; 
+      real <lower = 0> eta_alpha_raw; // noise in ntp1
+      vector<lower = 0>[N] ft;
+
+      }
+      
+      transformed parameters {
+      // declarations
+      real <lower = 0> m; // parameter m = mu_alpha / beta0. The parameters mu_alpha and beta0 are highly correlated in posterior sampling, leading to divergences. The reparameterization to m prevents this
+      real <lower = 0> mu_alpha; // the population-level mean oviposition rate (per adult)
+      vector<lower = 0>[N] beta; // cannibalism rate (per adult, per egg)
+      real <lower = 0> beta0; 
+      real <lower = 0> beta1; 
+      real <lower = 0> eta_alpha; // noise in ntp1
+      vector<lower = 0>[N] mu_zt;
+      vector<lower = 0>[N] sigma_zt;
+      //vector<lower = 0>[N] ft;
+
+
+      // rescale non-centered parameters   
+      m = m_scale * m_raw;
+      beta0 = beta0_loc + beta0_scale * beta0_raw; 
+      mu_alpha = m * beta0; 
+      beta1 = beta1_loc + beta1_scale * beta1_raw; 
+      eta_alpha = eta_alpha_loc + eta_alpha_scale * eta_alpha_raw;
+
+      // true transformed params
+      beta = beta0 + nt * beta1;
+      //ft = nt ./ 2;
+      // larvae model
+      vector[N] focal_exponent = ft.*ovi_period.*beta;
+      
+      mu_zt = mu_alpha * (1-exp(-focal_exponent)) ./ beta;
+      sigma_zt = eta_alpha * sqrt( (1- exp(-2 * focal_exponent)) ./ (2 * beta));
+      
+      }
+      
+      model {
+      // priors  
+      m_raw ~ std_normal();
+      beta0_raw ~ std_normal();
+      beta1_raw ~ std_normal();
+      eta_alpha_raw ~ exponential(1);
+      ft ~ normal(0.5 * nt, 0.5 * sqrt(nt));
+      
+      // likelihood
+      for(i in 1:N)
+      {
+        ntp1[i] ~ normal(0.91*mu_zt[i], 0.91*sigma_zt[i]) T[0,];
+      }
+      
+
+      }
+      
+       generated quantities{
+       int M  = 100;
+      vector[N] log_lik;
+      for(i in 1:N)
+      {
+        log_lik[i] = log_lik_Simpson_f(ntp1[i], nt[i], ovi_period[i], mu_alpha, beta0, beta1, eta_alpha, M); 
+      }
+       }
+      
+      
+      ',
+        
+        here("models/mod1_D2.stan"))
+```
+
+# Model 2
+model with demographic stochasticity, demographic heterogeneity, and sex-ratio stochasticity
+```{r}
+
+mod2_description <- "demographic stochasticity (oviposition), sex-ratio stochasticity, and demographic heterogeneity (oviposition)"
+
+write('
+     functions {
+     
+  real f(real ntp1, real nt, real ft, real ovi_period, real mu_alpha, real beta0, real beta1, real eta_alpha, real sigma_alpha) {
+  
+  real beta = beta0 + nt * beta1;
+  real focal_exponent = ft * ovi_period * beta;
+  real mu_zt = mu_alpha * (1-exp(-focal_exponent)) / beta;
+      real t1 = log(ft * beta *  pow(eta_alpha,2));
+      real t2 = log(ft * beta *  pow(eta_alpha,2)) -2 * focal_exponent;
+      real t3 = log(2 * pow(sigma_alpha, 2));
+      real t4 = log(2 * pow(sigma_alpha, 2)) - 2* focal_exponent;
+      real t5 = log(4 * pow(sigma_alpha,2)) - focal_exponent;
+    
+      real sigma_zt = sqrt((exp(t1) - exp(t2) + exp(t3) + exp(t4) - exp(t5)) / (2 * ft * pow(beta,2)));
+  real log_prob_nt_to_ft = normal_lpdf(ft | 0.5*nt, 0.5*sqrt(nt)) - normal_lccdf(0 | 0.5*nt, 0.5*sqrt(nt));
+  real log_prob_ft_to_ntp1 = normal_lpdf(ntp1 | 0.91*mu_zt, 0.91*sigma_zt) - normal_lccdf(0 | 0.91*mu_zt, 0.91*sigma_zt);
+  return(log_prob_nt_to_ft + log_prob_ft_to_ntp1);
+  }
+  
+  real get_simp_add_on(int index, int M)
+  {
+  real res;
+  if(index == 0 || index == M)
+  {
+  res = 0;
+  } else if(index % 2 == 0)
+  {
+  res = 0.6931472;
+  } else{
+  res = 1.386294;
+  }
+  return(res);
+  }
+  
+  real log_lik_Simpson_f(real ntp1, real nt, real ovi_period, real mu_alpha, real beta0, real beta1, real eta_alpha, real sigma_alpha, int M) {
+    vector[M+1] lp; // M intervals implies M+1 partition points
+    real h; // delta x, i.e. interval length
+      real li = 0.5*nt - 4 * 0.5 * sqrt(nt);
+      real ui = 0.5*nt + 4 * 0.5 * sqrt(nt);
+      if(li < 0.5)
+      {
+        li = 0.5;
+      }
+    h = (ui - li)/M;
+    
+    for(m in 0:M)
+  {
+    lp[m + 1] = get_simp_add_on(m, M) + f(ntp1, nt, li + m * h, ovi_period, mu_alpha, beta0, beta1, eta_alpha, sigma_alpha);
+  }
+
+    return(log(h/3) + log_sum_exp(lp));
+  }
+  
+     }
+  
+      data {
+      int <lower = 1> N; // number of total data
+      vector<lower = 0>[N] nt;
+      vector<lower = 0>[N] ntp1;
+      vector<lower = 0>[N] ovi_period;
+      
+
+      real <lower = 0> m_scale;
+      real <lower = 0> beta0_loc;
+      real <lower = 0> beta0_scale;
+      real <lower = 0> beta1_loc;
+      real <lower = 0> beta1_scale;
+      real <lower = 0> eta_alpha_loc;
+      real <lower = 0> eta_alpha_scale;
+      real <lower = 0> sigma_alpha_loc;
+      real <lower = 0> sigma_alpha_scale;
+      }
+      
+      parameters {
+      real <lower = 0> m_raw; 
+      real <lower = 0> beta0_raw; // cannibalism rate intercept (per adult, per egg)
+      real <lower = 0> beta1_raw; 
+      real <lower = 0> eta_alpha_raw; // noise in ntp1
+      real <lower = 0> sigma_alpha_raw; // noise in ntp1
+      vector<lower = 0>[N] ft;
+      vector<lower = 0>[N] alpha_raw;
+      }
+      
+      transformed parameters {
+      // declarations
+      real <lower = 0> m; // parameter m = mu_alpha / beta0. The parameters mu_alpha and beta0 are highly correlated in posterior sampling, leading to divergences. The reparameterization to m prevents this
+      real <lower = 0> mu_alpha; // the population-level mean oviposition rate (per adult)
+      vector<lower = 0>[N] beta; // cannibalism rate (per adult, per egg)
+      real <lower = 0> beta0; 
+      real <lower = 0> beta1; 
+      real <lower = 0> eta_alpha; // noise in ntp1
+      real <lower = 0> sigma_alpha;
+      vector<lower = 0>[N] mu_zt;
+      vector<lower = 0>[N] sigma_zt;
+      vector<lower = 0>[N] alpha;
+
+
+      // rescale non-centered parameters   
+      m = m_scale * m_raw;
+      beta0 = beta0_loc + beta0_scale * beta0_raw; 
+      mu_alpha = m * beta0; 
+      beta1 = beta1_loc + beta1_scale * beta1_raw; 
+      eta_alpha = eta_alpha_loc + eta_alpha_scale * eta_alpha_raw;
+      sigma_alpha = sigma_alpha_loc + sigma_alpha_scale * sigma_alpha_raw;
+
+      // true transformed params
+      beta = beta0 + nt * beta1;
+      alpha = mu_alpha + (sigma_alpha./sqrt(ft)) .* alpha_raw; 
+
+      // larvae model
+      vector[N] focal_exponent = ft.*ovi_period.*beta;
+      
+      mu_zt = alpha .* (1-exp(-focal_exponent)) ./ beta;
+      
+      vector[N] t1 = log(ft .* beta *  pow(eta_alpha,2));
+      vector[N] t2 = log(ft .* beta *  pow(eta_alpha,2)) -2 * focal_exponent;
+      real t3 = log(2 * pow(sigma_alpha, 2));
+      vector[N] t4 = log(2 * pow(sigma_alpha, 2)) - 2* focal_exponent;
+      vector[N] t5 = log(4 * pow(sigma_alpha,2)) - focal_exponent;
+    
+      sigma_zt = sqrt((exp(t1) - exp(t2) + exp(t3) + exp(t4) - exp(t5)) ./ (2 * ft .* pow(beta,2)));
+
+      }
+      
+      model {
+      // priors  
+      m_raw ~ std_normal();
+      beta0_raw ~ std_normal();
+      beta1_raw ~ std_normal();
+      eta_alpha_raw ~ exponential(1);
+      sigma_alpha_raw ~ exponential(1);
+      ft ~ normal(0.5 * nt, 0.5 * sqrt(nt));
+      alpha_raw ~ std_normal();
+
+      // likelihood
+      for(i in 1:N)
+      {
+        ntp1[i] ~ normal(0.91*mu_zt[i], 0.91*sigma_zt[i]) T[0,];
+      }
+      
+      //ntp1 ~ normal(mu_zt, sigma_zt);
+      
+      }
+      
+       generated quantities{
+       int M  = 100;
+      vector[N] log_lik;
+      for(i in 1:N)
+      {
+        log_lik[i] = log_lik_Simpson_f(ntp1[i], nt[i], ovi_period[i], mu_alpha, beta0, beta1, eta_alpha, sigma_alpha, M); 
+      }
+       }
+      
+      ',
+        
+        here("models/mod2_D2.stan"))
+```
+
+# Model 3
+demographic stochasticity with autocorrelation,  and sex-ratio stochasticity
+```{r}
+mod3_description <- "demographic stochasticity (oviposition) with temporal autocorrelation, sex-ratio stochasticity"
+
+write('
+     functions {
+     
+  real f(real ntp1, real nt, real ft, real ovi_period, real mu_alpha, real beta0, real beta1, real eta_alpha, real rho) {
+  
+  real beta = beta0 + nt * beta1;
+  real focal_exponent = ft * ovi_period * beta;
+  real mu_zt = mu_alpha * (1-exp(-focal_exponent)) / beta;
+      
+        real t1 = -2 * focal_exponent;
+        real t2 = log(2 * ft * beta * rho);
+        real t3 = log(ft * beta * rho) -2 * focal_exponent;
+        real t4 = log(ft * beta * rho) - (2 * ovi_period / rho);
+        real t5 = log(4 * ft * beta * rho) - ovi_period *(ft * beta + (1/rho));
+        real t6 = log(pow(ft * beta * rho,2));
+        real t7 = log(pow(ft * beta * rho,2)) - (2 * ovi_period / rho);
+
+      real sigma_zt = sqrt( (1 - exp(t1) - exp(t2) - exp(t3) - exp(t4) + exp(t5) + exp(t6) - exp(t7))  *((pow(eta_alpha * rho,2)) / (2 * beta * pow(- 1 + ft * beta * rho, 2) * (1 + ft * beta * rho) )));
+  real log_prob_nt_to_ft = normal_lpdf(ft | 0.5*nt, 0.5*sqrt(nt)) - normal_lccdf(0 | 0.5*nt, 0.5*sqrt(nt));
+  real log_prob_ft_to_ntp1 = normal_lpdf(ntp1 | 0.91*mu_zt, 0.91*sigma_zt) - normal_lccdf(0 | 0.91*mu_zt, 0.91*sigma_zt);
+  return(log_prob_nt_to_ft + log_prob_ft_to_ntp1);
+  }
+  
+  real get_simp_add_on(int index, int M)
+  {
+  real res;
+  if(index == 0 || index == M)
+  {
+  res = 0;
+  } else if(index % 2 == 0)
+  {
+  res = 0.6931472;
+  } else{
+  res = 1.386294;
+  }
+  return(res);
+  }
+  
+  real log_lik_Simpson_f(real ntp1, real nt, real ovi_period, real mu_alpha, real beta0, real beta1, real eta_alpha, real rho, int M) {
+    vector[M+1] lp; // M intervals implies M+1 partition points
+    real h; // delta x, i.e. interval length
+      real li = 0.5*nt - 4 * 0.5 * sqrt(nt);
+      real ui = 0.5*nt + 4 * 0.5 * sqrt(nt);
+      if(li < 0.5)
+      {
+        li = 0.5;
+      }
+    h = (ui - li)/M;
+    
+    for(m in 0:M)
+  {
+    lp[m + 1] = get_simp_add_on(m, M) + f(ntp1, nt, li + m * h, ovi_period, mu_alpha, beta0, beta1, eta_alpha, rho);
+  }
+
+    return(log(h/3) + log_sum_exp(lp));
+  }
+  
+     }
+     
+      data {
+      int <lower = 1> N; // number of total data
+      vector<lower = 0>[N] nt;
+      vector<lower = 0>[N] ntp1;
+      vector<lower = 0>[N] ovi_period;
+      
+
+      real <lower = 0> m_scale;
+      real <lower = 0> beta0_loc;
+      real <lower = 0> beta0_scale;
+      real <lower = 0> beta1_loc;
+      real <lower = 0> beta1_scale;
+      real <lower = 0> eta_alpha_loc;
+      real <lower = 0> eta_alpha_scale;
+     // real <lower = 0> sigma_alpha_loc;
+     // real <lower = 0> sigma_alpha_scale;
+      real <lower = 0> rho_loc;
+      real <lower = 0> rho_scale;
+      }
+      
+      parameters {
+      real <lower = 0> m_raw; 
+      real <lower = 0> beta0_raw; // cannibalism rate intercept (per adult, per egg)
+      real <lower = 0> beta1_raw; 
+      real <lower = 0> eta_alpha_raw; // noise in ntp1
+     //real <lower = 0> sigma_alpha_raw; // noise in ntp1
+      vector<lower = 0>[N] ft;
+     // vector<lower = 0>[N] alpha_raw;
+      real <lower = 0> rho_raw; 
+      }
+      
+      transformed parameters {
+      // declarations
+      real <lower = 0> m; // parameter m = mu_alpha / beta0. The parameters mu_alpha and beta0 are highly correlated in posterior sampling, leading to divergences. The reparameterization to m prevents this
+      real <lower = 0> mu_alpha; // the population-level mean oviposition rate (per adult)
+      vector<lower = 0>[N] beta; // cannibalism rate (per adult, per egg)
+      real <lower = 0> beta0; 
+      real <lower = 0> beta1; 
+      real <lower = 0> eta_alpha; // noise in ntp1
+      //real <lower = 0> sigma_alpha;
+      vector<lower = 0>[N] mu_zt;
+      vector<lower = 0>[N] sigma_zt;
+      //vector<lower = 0>[N] alpha;
+      real <lower = 0> rho; 
+
+
+      // rescale non-centered parameters   
+      m = m_scale * m_raw;
+      beta0 = beta0_loc + beta0_scale * beta0_raw; 
+      mu_alpha = m * beta0; 
+      beta1 = beta1_loc + beta1_scale * beta1_raw; 
+      eta_alpha = eta_alpha_loc + eta_alpha_scale * eta_alpha_raw;
+      //sigma_alpha = sigma_alpha_loc + sigma_alpha_scale * sigma_alpha_raw;
+      rho = rho_loc + rho_scale * rho_raw;
+      
+      // true transformed params
+      beta = beta0 + nt * beta1;
+      // alpha = mu_alpha + (sigma_alpha./sqrt(ft)) .* alpha_raw; 
+
+      // larvae model
+      vector[N] focal_exponent = ft.*ovi_period.*beta;
+      mu_zt = mu_alpha * (1-exp(-focal_exponent)) ./ beta;
+
+      
+        vector[N] t1 = -2 * focal_exponent;
+        vector[N] t2 = log(2 * ft .* beta * rho);
+        vector[N] t3 = log(ft .* beta * rho) -2 * focal_exponent;
+        vector[N] t4 = log(ft .* beta * rho) - (2 * ovi_period / rho);
+        vector[N] t5 = log(4 * ft .* beta * rho) - ovi_period .*(ft .* beta + (1/rho));
+        vector[N] t6 = log(pow(ft .* beta * rho,2));
+        vector[N] t7 = log(pow(ft .* beta * rho,2)) - (2 * ovi_period / rho);
+
+      sigma_zt = sqrt( (1 - exp(t1) - exp(t2) - exp(t3) - exp(t4) + exp(t5) + exp(t6) - exp(t7))  .*((pow(eta_alpha * rho,2)) ./ (2 * beta .* pow(- 1 + ft .* beta * rho, 2) .* (1 + ft .* beta * rho) )));
+      
+
+      }
+      
+      model {
+      // priors  
+      m_raw ~ std_normal();
+      beta0_raw ~ std_normal();
+      beta1_raw ~ std_normal();
+      eta_alpha_raw ~ exponential(1);
+      //sigma_alpha_raw ~ exponential(1);
+      ft ~ normal(0.5 * nt, 0.5 * sqrt(nt));
+      //alpha_raw ~ std_normal();
+      rho_raw ~ exponential(1);
+      
+      // likelihood
+      for(i in 1:N)
+      {
+        ntp1[i] ~ normal(0.91*mu_zt[i], 0.91*sigma_zt[i]) T[0,];
+      }
+      
+      //ntp1 ~ normal(mu_zt, sigma_zt);
+      
+      }
+      
+       generated quantities{
+       int M  = 100;
+      vector[N] log_lik;
+      for(i in 1:N)
+      {
+        log_lik[i] = log_lik_Simpson_f(ntp1[i], nt[i], ovi_period[i], mu_alpha, beta0, beta1, eta_alpha, rho, M); 
+      }
+       }
+      
+      ',
+        
+        here("models/mod3_D2.stan"))
+```
+
+# Model 4
+demographic stochasticity in oviposition rates, demographic stochasticity in cannibalism rates, and sex-ratio stochasticity
+```{r}
+mod4_description <- "demographic stochasticity (oviposition and cannibalism), sex-ratio stochasticity"
+
+write('
+     functions {
+     
+  real f(real ntp1, real nt, real ft, real ovi_period, real mu_alpha, real beta0, real beta1, real eta_alpha, real eta_beta) {
+  
+  real beta = beta0 + nt * beta1;
+  real focal_exponent = ft * ovi_period * beta;
+  real mu_zt = mu_alpha * (1-exp(-focal_exponent)) / beta;
+    
+  vector[12] ls;
+      ls[1] = log(2 * pow(mu_alpha,2) * pow(beta,2)) - 2 * focal_exponent;
+      ls[2] = log(2 * pow(mu_alpha,2) * pow(beta,2)) + ft * ovi_period * (pow(eta_beta,2) - 2 * beta);
+      ls[3] = log(pow(beta,3) * pow(eta_alpha,2));
+      ls[4] = log(pow(beta,3) * pow(eta_alpha,2)) + ft * ovi_period * (pow(eta_beta,2) - 2 * beta);
+      ls[5] = log( pow(mu_alpha,2) * beta * pow(eta_beta,2));
+      ls[6] =  log(3 * pow(mu_alpha,2) * beta * pow(eta_beta,2))  - 2 * focal_exponent;
+      ls[7] =  log(4 * pow(mu_alpha,2) * beta * pow(eta_beta,2))  - focal_exponent;
+      ls[8] =  log( pow(beta,2) * pow(eta_alpha,2) * pow(eta_beta,2));
+      ls[9] =  log( pow(beta,2) * pow(eta_alpha,2) * pow(eta_beta,2)) + ft * ovi_period * (pow(eta_beta,2) - 2 * beta);
+      ls[10] = log(pow(mu_alpha,2) * pow(eta_beta,4));
+      ls[11] = log(pow(mu_alpha,2) * pow(eta_beta,4)) - 2 * focal_exponent;
+      ls[12] = log( 2* pow(mu_alpha,2) * pow(eta_beta,4)) - focal_exponent;
+
+ real sigma_zt = sqrt( pow(pow(beta,2)*(2*pow(beta,2) - 3*beta*pow(eta_beta,2) + pow(eta_beta,4)),-1) *(-exp(ls[1]) +exp(ls[2]) +exp(ls[3]) -exp(ls[4]) +exp(ls[5]) +exp(ls[6]) -exp(ls[7]) -exp(ls[8]) +exp(ls[9]) -exp(ls[10]) -exp(ls[11]) +exp(ls[12])));
+
+  real log_prob_nt_to_ft = normal_lpdf(ft | 0.5*nt, 0.5*sqrt(nt)) - normal_lccdf(0 | 0.5*nt, 0.5*sqrt(nt));
+  real log_prob_ft_to_ntp1 = normal_lpdf(ntp1 | 0.91*mu_zt, 0.91*sigma_zt) - normal_lccdf(0 | 0.91*mu_zt, 0.91*sigma_zt);
+  return(log_prob_nt_to_ft + log_prob_ft_to_ntp1);
+  }
+  
+  real get_simp_add_on(int index, int M)
+  {
+  real res;
+  if(index == 0 || index == M)
+  {
+  res = 0;
+  } else if(index % 2 == 0)
+  {
+  res = 0.6931472;
+  } else{
+  res = 1.386294;
+  }
+  return(res);
+  }
+  
+  real log_lik_Simpson_f(real ntp1, real nt, real ovi_period, real mu_alpha, real beta0, real beta1, real eta_alpha, real eta_beta, int M) {
+    vector[M+1] lp; // M intervals implies M+1 partition points
+    real h; // delta x, i.e. interval length
+      real li = 0.5*nt - 4 * 0.5 * sqrt(nt);
+      real ui = 0.5*nt + 4 * 0.5 * sqrt(nt);
+      if(li < 0.5)
+      {
+        li = 0.5;
+      }
+    h = (ui - li)/M;
+    
+    for(m in 0:M)
+  {
+    lp[m + 1] = get_simp_add_on(m, M) + f(ntp1, nt, li + m * h, ovi_period, mu_alpha, beta0, beta1, eta_alpha, eta_beta);
+  }
+
+    return(log(h/3) + log_sum_exp(lp));
+  }
+  
+     }
+  
+      data {
+      int <lower = 1> N; // number of total data
+      vector<lower = 0>[N] nt;
+      vector<lower = 0>[N] ntp1;
+      vector<lower = 0>[N] ovi_period;
+      
+
+      real <lower = 0> m_scale;
+      real <lower = 0> beta0_loc;
+      real <lower = 0> beta0_scale;
+      real <lower = 0> beta1_loc;
+      real <lower = 0> beta1_scale;
+      real <lower = 0> eta_alpha_loc;
+      real <lower = 0> eta_alpha_scale;
+      real <lower = 0> eta_beta_loc;
+      real <lower = 0> eta_beta_scale;
+      }
+      
+      parameters {
+      real <lower = 0> m_raw; 
+      real <lower = 0> beta0_raw; // cannibalism rate intercept (per adult, per egg)
+      real <lower = 0> beta1_raw; 
+      real <lower = 0> eta_alpha_raw; // noise in ntp1
+      real <lower = 0> eta_beta_raw; // noise in ntp1
+      vector<lower = 0>[N] ft;
+      }
+      
+      transformed parameters {
+      // declarations
+      real <lower = 0> m; // parameter m = mu_alpha / beta0. The parameters mu_alpha and beta0 are highly correlated in posterior sampling, leading to divergences. The reparameterization to m prevents this
+      real <lower = 0> mu_alpha; // the population-level mean oviposition rate (per adult)
+      vector<lower = 0>[N] beta; // cannibalism rate (per adult, per egg)
+      real <lower = 0> beta0; 
+      real <lower = 0> beta1; 
+      real <lower = 0> eta_alpha; // noise in ntp1
+      real <lower = 0> eta_beta;
+      vector<lower = 0>[N] mu_zt;
+      vector<lower = 0>[N] sigma_zt;
+
+
+      // rescale non-centered parameters   
+      m = m_scale * m_raw;
+      beta0 = beta0_loc + beta0_scale * beta0_raw; 
+      mu_alpha = m * beta0; 
+      beta1 = beta1_loc + beta1_scale * beta1_raw; 
+      eta_alpha = eta_alpha_loc + eta_alpha_scale * eta_alpha_raw;
+      eta_beta = eta_beta_loc + eta_beta_scale * eta_beta_raw;
+
+      // true transformed params
+      beta = beta0 + nt * beta1;
+
+      // larvae model
+      vector[N] focal_exponent = ft.*ovi_period.*beta;
+      
+      mu_zt = mu_alpha * (1-exp(-focal_exponent)) ./ beta;
+      
+    for(i in 1:N)
+    {
+      vector[12] ls;
+      ls[1] = log(2 * pow(mu_alpha,2) * pow(beta[i],2)) - 2 * focal_exponent[i];
+      ls[2] = log(2 * pow(mu_alpha,2) * pow(beta[i],2)) + ft[i] * ovi_period[i] * (pow(eta_beta,2) - 2 * beta[i]);
+      ls[3] = log(pow(beta[i],3) * pow(eta_alpha,2));
+      ls[4] = log(pow(beta[i],3) * pow(eta_alpha,2)) + ft[i] * ovi_period[i] * (pow(eta_beta,2) - 2 * beta[i]);
+      ls[5] = log( pow(mu_alpha,2) * beta[i] * pow(eta_beta,2));
+      ls[6] =  log(3 * pow(mu_alpha,2) * beta[i] * pow(eta_beta,2))  - 2 * focal_exponent[i];
+      ls[7] =  log(4 * pow(mu_alpha,2) * beta[i] * pow(eta_beta,2))  - focal_exponent[i];
+      ls[8] =  log( pow(beta[i],2) * pow(eta_alpha,2) * pow(eta_beta,2));
+      ls[9] =  log( pow(beta[i],2) * pow(eta_alpha,2) * pow(eta_beta,2)) + ft[i] * ovi_period[i] * (pow(eta_beta,2) - 2 * beta[i]);
+      ls[10] = log(pow(mu_alpha,2) * pow(eta_beta,4));
+      ls[11] = log(pow(mu_alpha,2) * pow(eta_beta,4)) - 2 * focal_exponent[i];
+      ls[12] = log( 2* pow(mu_alpha,2) * pow(eta_beta,4)) - focal_exponent[i];
+
+ sigma_zt[i] = sqrt( pow(pow(beta[i],2)*(2*pow(beta[i],2) - 3*beta[i]*pow(eta_beta,2) + pow(eta_beta,4)),-1) *(-exp(ls[1]) +exp(ls[2]) +exp(ls[3]) -exp(ls[4]) +exp(ls[5]) +exp(ls[6]) -exp(ls[7]) -exp(ls[8]) +exp(ls[9]) -exp(ls[10]) -exp(ls[11]) +exp(ls[12])  ));
+    }
+
+      }
+      
+      model {
+      // priors  
+      m_raw ~ std_normal();
+      beta0_raw ~ std_normal();
+      beta1_raw ~ std_normal();
+      eta_alpha_raw ~ exponential(1);
+      eta_beta_raw ~ exponential(1);
+      ft ~ normal(0.5 * nt, 0.5 * sqrt(nt));
+
+      // likelihood
+      for(i in 1:N)
+      {
+        ntp1[i] ~ normal(0.91*mu_zt[i], 0.91*sigma_zt[i]) T[0,];
+      }
+      
+      //ntp1 ~ normal(mu_zt, sigma_zt);
+      
+      }
+      
+       generated quantities{
+       int M  = 100;
+      vector[N] log_lik;
+      for(i in 1:N)
+      {
+        log_lik[i] = log_lik_Simpson_f(ntp1[i], nt[i], ovi_period[i], mu_alpha, beta0, beta1, eta_alpha, eta_beta, M); 
+      }
+       }
+      
+      ',
+        
+        here("models/mod4_D2.stan"))
+```
+
+# Model 5
+demographic stochasticity in oviposition rates, demographic heterogeneity in oviposition rates
+```{r}
+  
+mod5_description <- "demographic stochasticity (oviposition), and demographic heterogeneity (oviposition)"
+
+write('
+
+  
+      data {
+      int <lower = 1> N; // number of total data
+      vector<lower = 0>[N] nt;
+      vector<lower = 0>[N] ntp1;
+      vector<lower = 0>[N] ovi_period;
+      
+
+      real <lower = 0> m_scale;
+      real <lower = 0> beta0_loc;
+      real <lower = 0> beta0_scale;
+      real <lower = 0> beta1_loc;
+      real <lower = 0> beta1_scale;
+      real <lower = 0> eta_alpha_loc;
+      real <lower = 0> eta_alpha_scale;
+      real <lower = 0> sigma_alpha_loc;
+      real <lower = 0> sigma_alpha_scale;
+      }
+      
+      parameters {
+      real <lower = 0> m_raw; 
+      real <lower = 0> beta0_raw; // cannibalism rate intercept (per adult, per egg)
+      real <lower = 0> beta1_raw; 
+      real <lower = 0> eta_alpha_raw; // noise in ntp1
+      real <lower = 0> sigma_alpha_raw; // noise in ntp1
+      vector<lower = 0>[N] alpha_raw;
+      }
+      
+      transformed parameters {
+      // declarations
+      real <lower = 0> m; // parameter m = mu_alpha / beta0. The parameters mu_alpha and beta0 are highly correlated in posterior sampling, leading to divergences. The reparameterization to m prevents this
+      real <lower = 0> mu_alpha; // the population-level mean oviposition rate (per adult)
+      vector<lower = 0>[N] beta; // cannibalism rate (per adult, per egg)
+      real <lower = 0> beta0; 
+      real <lower = 0> beta1; 
+      real <lower = 0> eta_alpha; // noise in ntp1
+      real <lower = 0> sigma_alpha;
+      vector<lower = 0>[N] mu_zt;
+      vector<lower = 0>[N] sigma_zt;
+      vector<lower = 0>[N] alpha;
+      vector<lower = 0>[N] ft;
+
+      // rescale non-centered parameters   
+      m = m_scale * m_raw;
+      beta0 = beta0_loc + beta0_scale * beta0_raw; 
+      mu_alpha = m * beta0; 
+      beta1 = beta1_loc + beta1_scale * beta1_raw; 
+      eta_alpha = eta_alpha_loc + eta_alpha_scale * eta_alpha_raw;
+      sigma_alpha = sigma_alpha_loc + sigma_alpha_scale * sigma_alpha_raw;
+
+      // true transformed params
+      beta = beta0 + nt * beta1;
+      ft = nt ./ 2;
+      alpha = mu_alpha + (sigma_alpha./sqrt(ft)) .* alpha_raw; 
+
+      // larvae model
+      vector[N] focal_exponent = ft.*ovi_period.*beta;
+      
+      mu_zt = alpha .* (1-exp(-focal_exponent)) ./ beta;
+      
+      vector[N] t1 = log(ft .* beta *  pow(eta_alpha,2));
+      vector[N] t2 = log(ft .* beta *  pow(eta_alpha,2)) -2 * focal_exponent;
+      real t3 = log(2 * pow(sigma_alpha, 2));
+      vector[N] t4 = log(2 * pow(sigma_alpha, 2)) - 2* focal_exponent;
+      vector[N] t5 = log(4 * pow(sigma_alpha,2)) - focal_exponent;
+    
+      sigma_zt = sqrt((exp(t1) - exp(t2) + exp(t3) + exp(t4) - exp(t5)) ./ (2 * ft .* pow(beta,2)));
+
+      }
+      
+      model {
+      // priors  
+      m_raw ~ std_normal();
+      beta0_raw ~ std_normal();
+      beta1_raw ~ std_normal();
+      eta_alpha_raw ~ exponential(1);
+      sigma_alpha_raw ~ exponential(1);
+      alpha_raw ~ std_normal();
+
+      // likelihood
+      for(i in 1:N)
+      {
+        ntp1[i] ~ normal(0.91*mu_zt[i], 0.91*sigma_zt[i]) T[0,];
+      }
+      
+      //ntp1 ~ normal(mu_zt, sigma_zt);
+      
+      }
+      
+       generated quantities{
+      int M  = 100;
+      vector[N] log_lik;
+      for(i in 1:N)
+      {
+        log_lik[i] = normal_lpdf(ntp1[i] | 0.91*mu_zt[i], 0.91*sigma_zt[i]) - normal_lccdf(0 | 0.91*mu_zt[i], 0.91*sigma_zt[i]); 
+      }
+       }
+      
+      ',
+        
+        here("models/mod5_D2.stan"))
+```
+
+# Model 6
+demographic stochasticity
+```{r}
+
+mod6_description <- "demographic stochasticity (oviposition)"
+  
+write('
+
+      data {
+      int <lower = 1> N; // number of total data
+      vector<lower = 0>[N] nt;
+      vector<lower = 0>[N] ntp1;
+      vector<lower = 0>[N] ovi_period;
+      
+
+      real <lower = 0> m_scale;
+      real <lower = 0> beta0_loc;
+      real <lower = 0> beta0_scale;
+      real <lower = 0> beta1_loc;
+      real <lower = 0> beta1_scale;
+      real <lower = 0> eta_alpha_loc;
+      real <lower = 0> eta_alpha_scale;
+      }
+      
+      parameters {
+      real <lower = 0> m_raw; 
+      real <lower = 0> beta0_raw; // cannibalism rate intercept (per adult, per egg)
+      real <lower = 0> beta1_raw; 
+      real <lower = 0> eta_alpha_raw; // noise in ntp1
+      }
+      
+      transformed parameters {
+      // declarations
+      real <lower = 0> m; // parameter m = mu_alpha / beta0. The parameters mu_alpha and beta0 are highly correlated in posterior sampling, leading to divergences. The reparameterization to m prevents this
+      real <lower = 0> mu_alpha; // the population-level mean oviposition rate (per adult)
+      vector<lower = 0>[N] beta; // cannibalism rate (per adult, per egg)
+      real <lower = 0> beta0; 
+      real <lower = 0> beta1; 
+      real <lower = 0> eta_alpha; // noise in ntp1
+      vector<lower = 0>[N] mu_zt;
+      vector<lower = 0>[N] sigma_zt;
+      vector<lower = 0>[N] ft;
+
+
+      // rescale non-centered parameters   
+      m = m_scale * m_raw;
+      beta0 = beta0_loc + beta0_scale * beta0_raw; 
+      mu_alpha = m * beta0; 
+      beta1 = beta1_loc + beta1_scale * beta1_raw; 
+      eta_alpha = eta_alpha_loc + eta_alpha_scale * eta_alpha_raw;
+
+      // true transformed params
+      beta = beta0 + nt * beta1;
+      ft = nt ./ 2;
+      // larvae model
+      vector[N] focal_exponent = ft.*ovi_period.*beta;
+      
+      mu_zt = mu_alpha * (1-exp(-focal_exponent)) ./ beta;
+      sigma_zt = eta_alpha * sqrt( (1- exp(-2 * focal_exponent)) ./ (2 * beta));
+      
+      }
+      
+      model {
+      // priors  
+      m_raw ~ std_normal();
+      beta0_raw ~ std_normal();
+      beta1_raw ~ std_normal();
+      eta_alpha_raw ~ exponential(1);
+
+      // likelihood
+      for(i in 1:N)
+      {
+        ntp1[i] ~ normal(0.91*mu_zt[i], 0.91*sigma_zt[i]) T[0,];
+      }
+      
+      //ntp1 ~ normal(mu_zt, sigma_zt);
+      
+      }
+      
+       generated quantities{
+       int M  = 100;
+      vector[N] log_lik;
+      for(i in 1:N)
+      {
+        log_lik[i] = normal_lpdf(ntp1[i] | 0.91*mu_zt[i], 0.91*sigma_zt[i]) - normal_lccdf(0 | 0.91*mu_zt[i], 0.91*sigma_zt[i]); 
+      }
+       }
+      
+      
+      ',
+        
+        here("models/mod6_D2.stan"))
+```
+
+# Model 7
+demographic heterogeneity
+```{r}
+
+mod7_description <- "demographic heterogeneity (oviposition)"
+ 
+write('
+      data {
+      int <lower = 1> N; // number of total data
+      vector<lower = 0>[N] nt;
+      vector<lower = 0>[N] ntp1;
+      vector<lower = 0>[N] ovi_period;
+      
+
+      real <lower = 0> m_scale;
+      real <lower = 0> beta0_loc;
+      real <lower = 0> beta0_scale;
+      real <lower = 0> beta1_loc;
+      real <lower = 0> beta1_scale;
+      real <lower = 0> sigma_alpha_loc;
+      real <lower = 0> sigma_alpha_scale;
+      }
+      
+      parameters {
+      real <lower = 0> m_raw; 
+      real <lower = 0> beta0_raw; // cannibalism rate intercept (per adult, per egg)
+      real <lower = 0> beta1_raw; 
+      real <lower = 0> sigma_alpha_raw; // noise in ntp1
+      }
+      
+      transformed parameters {
+      // declarations
+      real <lower = 0> m; // parameter m = mu_alpha / beta0. The parameters mu_alpha and beta0 are highly correlated in posterior sampling, leading to divergences. The reparameterization to m prevents this
+      real <lower = 0> mu_alpha; // the population-level mean oviposition rate (per adult)
+      vector<lower = 0>[N] beta; // cannibalism rate (per adult, per egg)
+      real <lower = 0> beta0; 
+      real <lower = 0> beta1; 
+      real <lower = 0> sigma_alpha;
+      vector<lower = 0>[N] mu_zt;
+      vector<lower = 0>[N] sigma_zt;
+      vector<lower = 0>[N] ft;
+
+
+      // rescale non-centered parameters   
+      m = m_scale * m_raw;
+      beta0 = beta0_loc + beta0_scale * beta0_raw; 
+      mu_alpha = m * beta0; 
+      beta1 = beta1_loc + beta1_scale * beta1_raw; 
+      sigma_alpha = sigma_alpha_loc + sigma_alpha_scale * sigma_alpha_raw;
+      ft = nt ./ 2; 
+
+      // true transformed params
+      beta = beta0 + nt * beta1;
+
+      // larvae model
+      vector[N] focal_exponent = ft.*ovi_period.*beta;
+      
+      mu_zt = mu_alpha * (1-exp(-focal_exponent)) ./ beta;
+      
+      vector[N] t1 = log(2*pow(sigma_alpha, 2)) - focal_exponent;
+      vector[N] t2 = log(pow(sigma_alpha, 2)) -2 * focal_exponent;
+      real t3 = log(pow(sigma_alpha, 2));
+    
+      sigma_zt = sqrt((-exp(t1) + exp(t2) + exp(t3)) ./ (ft .* pow(beta,2)));
+
+      }
+      
+      model {
+      // priors  
+      m_raw ~ std_normal();
+      beta0_raw ~ std_normal();
+      beta1_raw ~ std_normal();
+      sigma_alpha_raw ~ exponential(1);
+
+      // likelihood
+      for(i in 1:N)
+      {
+        ntp1[i] ~ normal(0.91*mu_zt[i], 0.91*sigma_zt[i]) T[0,];
+      }
+      
+      //ntp1 ~ normal(mu_zt, sigma_zt);
+      
+      }
+      
+       generated quantities{
+       int M  = 100;
+      vector[N] log_lik;
+      for(i in 1:N)
+      {
+        log_lik[i] = normal_lpdf(ntp1[i] | 0.91*mu_zt[i], 0.91*sigma_zt[i]) - normal_lccdf(0 | 0.91*mu_zt[i], 0.91*sigma_zt[i]); 
+      }
+       }
+      
+      ',
+        
+        here("models/mod7_D2.stan"))
+```
+
+# Model 8
+demographic heterogeneity and sex-ratio stochasticity
+```{r}
+
+mod8_description <- "demographic heterogeneity (oviposition), sex-ratio stochasticity"
+ 
+write('
+     functions {
+     
+  real f(real ntp1, real nt, real ft, real ovi_period, real mu_alpha, real beta0, real beta1, real sigma_alpha) {
+  
+  real beta = beta0 + nt * beta1;
+  real focal_exponent = ft * ovi_period * beta;
+  real mu_zt = mu_alpha * (1-exp(-focal_exponent)) / beta;
+      real t1 = log(2*pow(sigma_alpha, 2)) - focal_exponent;
+      real t2 = log(pow(sigma_alpha, 2)) -2 * focal_exponent;
+      real t3 = log(pow(sigma_alpha, 2));
+    
+      real sigma_zt = sqrt((-exp(t1) + exp(t2) + exp(t3)) / (ft * pow(beta,2)));
+  real log_prob_nt_to_ft = normal_lpdf(ft | 0.5*nt, 0.5*sqrt(nt)) - normal_lccdf(0 | 0.5*nt, 0.5*sqrt(nt));
+  real log_prob_ft_to_ntp1 = normal_lpdf(ntp1 | 0.91*mu_zt, 0.91*sigma_zt) - normal_lccdf(0 | 0.91*mu_zt, 0.91*sigma_zt);
+  return(log_prob_nt_to_ft + log_prob_ft_to_ntp1);
+  }
+  
+  real get_simp_add_on(int index, int M)
+  {
+  real res;
+  if(index == 0 || index == M)
+  {
+  res = 0;
+  } else if(index % 2 == 0)
+  {
+  res = 0.6931472;
+  } else{
+  res = 1.386294;
+  }
+  return(res);
+  }
+  
+  real log_lik_Simpson_f(real ntp1, real nt, real ovi_period, real mu_alpha, real beta0, real beta1, real sigma_alpha, int M) {
+    vector[M+1] lp; // M intervals implies M+1 partition points
+    real h; // delta x, i.e. interval length
+      real li = 0.5*nt - 4 * 0.5 * sqrt(nt);
+      real ui = 0.5*nt + 4 * 0.5 * sqrt(nt);
+      if(li < 0.5)
+      {
+        li = 0.5;
+      }
+    h = (ui - li)/M;
+    
+    for(m in 0:M)
+  {
+    lp[m + 1] = get_simp_add_on(m, M) + f(ntp1, nt, li + m * h, ovi_period, mu_alpha, beta0, beta1, sigma_alpha);
+  }
+
+    return(log(h/3) + log_sum_exp(lp));
+  }
+  
+     }
+  
+      data {
+      int <lower = 1> N; // number of total data
+      vector<lower = 0>[N] nt;
+      vector<lower = 0>[N] ntp1;
+      vector<lower = 0>[N] ovi_period;
+      
+
+      real <lower = 0> m_scale;
+      real <lower = 0> beta0_loc;
+      real <lower = 0> beta0_scale;
+      real <lower = 0> beta1_loc;
+      real <lower = 0> beta1_scale;
+      real <lower = 0> sigma_alpha_loc;
+      real <lower = 0> sigma_alpha_scale;
+      }
+      
+      parameters {
+      real <lower = 0> m_raw; 
+      real <lower = 0> beta0_raw; // cannibalism rate intercept (per adult, per egg)
+      real <lower = 0> beta1_raw; 
+      real <lower = 0> sigma_alpha_raw; // noise in ntp1
+      vector<lower = 0>[N] ft;
+      }
+      
+      transformed parameters {
+      // declarations
+      real <lower = 0> m; // parameter m = mu_alpha / beta0. The parameters mu_alpha and beta0 are highly correlated in posterior sampling, leading to divergences. The reparameterization to m prevents this
+      real <lower = 0> mu_alpha; // the population-level mean oviposition rate (per adult)
+      vector<lower = 0>[N] beta; // cannibalism rate (per adult, per egg)
+      real <lower = 0> beta0; 
+      real <lower = 0> beta1; 
+      real <lower = 0> sigma_alpha;
+      vector<lower = 0>[N] mu_zt;
+      vector<lower = 0>[N] sigma_zt;
+
+
+      // rescale non-centered parameters   
+      m = m_scale * m_raw;
+      beta0 = beta0_loc + beta0_scale * beta0_raw; 
+      mu_alpha = m * beta0; 
+      beta1 = beta1_loc + beta1_scale * beta1_raw; 
+      sigma_alpha = sigma_alpha_loc + sigma_alpha_scale * sigma_alpha_raw;
+      //ft = nt ./ 2; 
+
+      // true transformed params
+      beta = beta0 + nt * beta1;
+
+      // larvae model
+      vector[N] focal_exponent = ft.*ovi_period.*beta;
+      
+      mu_zt = mu_alpha * (1-exp(-focal_exponent)) ./ beta;
+      
+      vector[N] t1 = log(2*pow(sigma_alpha, 2)) - focal_exponent;
+      vector[N] t2 = log(pow(sigma_alpha, 2)) -2 * focal_exponent;
+      real t3 = log(pow(sigma_alpha, 2));
+    
+      sigma_zt = sqrt((-exp(t1) + exp(t2) + exp(t3)) ./ (ft .* pow(beta,2)));
+
+      }
+      
+      model {
+      // priors  
+      m_raw ~ std_normal();
+      beta0_raw ~ std_normal();
+      beta1_raw ~ std_normal();
+      sigma_alpha_raw ~ exponential(1);
+      ft ~ normal(0.5 * nt, 0.5 * sqrt(nt));
+      
+      // likelihood
+      for(i in 1:N)
+      {
+        ntp1[i] ~ normal(0.91*mu_zt[i], 0.91*sigma_zt[i]) T[0,];
+      }
+      
+      //ntp1 ~ normal(mu_zt, sigma_zt);
+      
+      }
+      
+       generated quantities{
+       int M  = 100;
+      vector[N] log_lik;
+      for(i in 1:N)
+      {
+        log_lik[i] = log_lik_Simpson_f(ntp1[i], nt[i], ovi_period[i], mu_alpha, beta0, beta1, sigma_alpha, M); 
+      }
+       }
+      
+      ',
+        
+        here("models/mod8_D2.stan"))
+```
+
+# Model 9
+demographic stochasticity, environmental stochasticity (scale parameter is sigma_alpha), and sex-ratio stochasticity
+```{r}
+
+mod9_description <- "demographic stochasticity (oviposition), sex-ratio stochasticity, and environmental stochasticity (oviposition)"
+
+write('
+     functions {
+     
+  real f(real ntp1, real nt, real ft, real ovi_period, real mu_alpha, real beta0, real beta1, real eta_alpha, real sigma_alpha) {
+  
+  real beta = beta0 + nt * beta1;
+  real focal_exponent = ft * ovi_period * beta;
+  real mu_zt = mu_alpha * (1-exp(-focal_exponent)) / beta;
+      real t1 = log( beta *  pow(eta_alpha,2));
+      real t2 = log( beta *  pow(eta_alpha,2)) -2 * focal_exponent;
+      real t3 = log(2 * pow(sigma_alpha, 2));
+      real t4 = log(2 * pow(sigma_alpha, 2)) - 2* focal_exponent;
+      real t5 = log(4 * pow(sigma_alpha,2)) - focal_exponent;
+    
+      real sigma_zt = sqrt((exp(t1) - exp(t2) + exp(t3) + exp(t4) - exp(t5)) / (2 * pow(beta,2)));
+  real log_prob_nt_to_ft = normal_lpdf(ft | 0.5*nt, 0.5*sqrt(nt)) - normal_lccdf(0 | 0.5*nt, 0.5*sqrt(nt));
+  real log_prob_ft_to_ntp1 = normal_lpdf(ntp1 | 0.91*mu_zt, 0.91*sigma_zt) - normal_lccdf(0 | 0.91*mu_zt, 0.91*sigma_zt);
+  return(log_prob_nt_to_ft + log_prob_ft_to_ntp1);
+  }
+  
+  real get_simp_add_on(int index, int M)
+  {
+  real res;
+  if(index == 0 || index == M)
+  {
+  res = 0;
+  } else if(index % 2 == 0)
+  {
+  res = 0.6931472;
+  } else{
+  res = 1.386294;
+  }
+  return(res);
+  }
+  
+  real log_lik_Simpson_f(real ntp1, real nt, real ovi_period, real mu_alpha, real beta0, real beta1, real eta_alpha, real sigma_alpha, int M) {
+    vector[M+1] lp; // M intervals implies M+1 partition points
+    real h; // delta x, i.e. interval length
+      real li = 0.5*nt - 4 * 0.5 * sqrt(nt);
+      real ui = 0.5*nt + 4 * 0.5 * sqrt(nt);
+      if(li < 0.5)
+      {
+        li = 0.5;
+      }
+    h = (ui - li)/M;
+    
+    for(m in 0:M)
+  {
+    lp[m + 1] = get_simp_add_on(m, M) + f(ntp1, nt, li + m * h, ovi_period, mu_alpha, beta0, beta1, eta_alpha, sigma_alpha);
+  }
+
+    return(log(h/3) + log_sum_exp(lp));
+  }
+  
+     }
+  
+      data {
+      int <lower = 1> N; // number of total data
+      vector<lower = 0>[N] nt;
+      vector<lower = 0>[N] ntp1;
+      vector<lower = 0>[N] ovi_period;
+      
+
+      real <lower = 0> m_scale;
+      real <lower = 0> beta0_loc;
+      real <lower = 0> beta0_scale;
+      real <lower = 0> beta1_loc;
+      real <lower = 0> beta1_scale;
+      real <lower = 0> eta_alpha_loc;
+      real <lower = 0> eta_alpha_scale;
+      real <lower = 0> sigma_alpha_loc;
+      real <lower = 0> sigma_alpha_scale;
+      }
+      
+      parameters {
+      real <lower = 0> m_raw; 
+      real <lower = 0> beta0_raw; // cannibalism rate intercept (per adult, per egg)
+      real <lower = 0> beta1_raw; 
+      real <lower = 0> eta_alpha_raw; // noise in ntp1
+      real <lower = 0> sigma_alpha_raw; // noise in ntp1
+      vector<lower = 0>[N] ft;
+      vector<lower = 0>[N] alpha_raw;
+      }
+      
+      transformed parameters {
+      // declarations
+      real <lower = 0> m; // parameter m = mu_alpha / beta0. The parameters mu_alpha and beta0 are highly correlated in posterior sampling, leading to divergences. The reparameterization to m prevents this
+      real <lower = 0> mu_alpha; // the population-level mean oviposition rate (per adult)
+      vector<lower = 0>[N] beta; // cannibalism rate (per adult, per egg)
+      real <lower = 0> beta0; 
+      real <lower = 0> beta1; 
+      real <lower = 0> eta_alpha; // noise in ntp1
+      real <lower = 0> sigma_alpha;
+      vector<lower = 0>[N] mu_zt;
+      vector<lower = 0>[N] sigma_zt;
+      vector<lower = 0>[N] alpha;
+
+
+      // rescale non-centered parameters   
+      m = m_scale * m_raw;
+      beta0 = beta0_loc + beta0_scale * beta0_raw; 
+      mu_alpha = m * beta0; 
+      beta1 = beta1_loc + beta1_scale * beta1_raw; 
+      eta_alpha = eta_alpha_loc + eta_alpha_scale * eta_alpha_raw;
+      sigma_alpha = sigma_alpha_loc + sigma_alpha_scale * sigma_alpha_raw;
+
+      // true transformed params
+      beta = beta0 + nt * beta1;
+      alpha = mu_alpha + (sigma_alpha./sqrt(ft)) .* alpha_raw; 
+
+      // larvae model
+      vector[N] focal_exponent = ft.*ovi_period.*beta;
+      
+      mu_zt = alpha .* (1-exp(-focal_exponent)) ./ beta;
+      
+      vector[N] t1 = log( beta *  pow(eta_alpha,2));
+      vector[N] t2 = log( beta *  pow(eta_alpha,2)) -2 * focal_exponent;
+      real t3 = log(2 * pow(sigma_alpha, 2));
+      vector[N] t4 = log(2 * pow(sigma_alpha, 2)) - 2* focal_exponent;
+      vector[N] t5 = log(4 * pow(sigma_alpha,2)) - focal_exponent;
+    
+      sigma_zt = sqrt((exp(t1) - exp(t2) + exp(t3) + exp(t4) - exp(t5)) ./ (2 * pow(beta,2)));
+
+      }
+      
+      model {
+      // priors  
+      m_raw ~ std_normal();
+      beta0_raw ~ std_normal();
+      beta1_raw ~ std_normal();
+      eta_alpha_raw ~ exponential(1);
+      sigma_alpha_raw ~ exponential(1);
+      ft ~ normal(0.5 * nt, 0.5 * sqrt(nt));
+      alpha_raw ~ std_normal();
+
+      // likelihood
+      for(i in 1:N)
+      {
+        ntp1[i] ~ normal(0.91*mu_zt[i], 0.91*sigma_zt[i]) T[0,];
+      }
+      
+      //ntp1 ~ normal(mu_zt, sigma_zt);
+      
+      }
+      
+       generated quantities{
+       int M  = 100;
+      vector[N] log_lik;
+      for(i in 1:N)
+      {
+        log_lik[i] = log_lik_Simpson_f(ntp1[i], nt[i], ovi_period[i], mu_alpha, beta0, beta1, eta_alpha, sigma_alpha, M); 
+      }
+       }
+      
+      ',
+        
+        here("models/mod9_D2.stan"))
+```
+
+# Model 10
+Env stochasticity and sex ratio stoch
+```{r}
+
+mod10_description <- "environmental stochasticity (oviposition), sex-ratio stochasticity"
+
+write('
+     functions {
+
+  real f(real ntp1, real nt, real ft, real ovi_period, real mu_alpha, real beta0, real beta1, real gamma_alpha) {
+
+  real beta = beta0 + nt * beta1;
+  real focal_exponent = ft * ovi_period * beta;
+      real t1 = -2 * focal_exponent;
+      real t2 = log(2) - focal_exponent;
+
+      real mu_zt = mu_alpha * (1-exp(-focal_exponent)) / beta;
+      real sigma_zt = sqrt( pow(gamma_alpha / beta, 2) * (1 + exp(t1) - exp(t2)));
+
+  real log_prob_nt_to_ft = normal_lpdf(ft | 0.5*nt, 0.5*sqrt(nt)) - normal_lccdf(0 | 0.5*nt, 0.5*sqrt(nt));
+  real log_prob_ft_to_ntp1 = normal_lpdf(ntp1 | 0.91*mu_zt, 0.91*sigma_zt) - normal_lccdf(0 | 0.91*mu_zt, 0.91*sigma_zt);
+  return(log_prob_nt_to_ft + log_prob_ft_to_ntp1);
+  }
+
+  real get_simp_add_on(int index, int M)
+  {
+  real res;
+  if(index == 0 || index == M)
+  {
+  res = 0;
+  } else if(index % 2 == 0)
+  {
+  res = 0.6931472;
+  } else{
+  res = 1.386294;
+  }
+  return(res);
+  }
+
+  real log_lik_Simpson_f(real ntp1, real nt, real ovi_period, real mu_alpha, real beta0, real beta1, real gamma_alpha, int M) {
+    vector[M+1] lp; // M intervals implies M+1 partition points
+    real h; // delta x, i.e. interval length
+      real li = 0.5*nt - 4 * 0.5 * sqrt(nt);
+      real ui = 0.5*nt + 4 * 0.5 * sqrt(nt);
+      if(li < 0.5)
+      {
+        li = 0.5;
+      }
+    h = (ui - li)/M;
+
+    for(m in 0:M)
+  {
+    lp[m + 1] = get_simp_add_on(m, M) + f(ntp1, nt, li + m * h, ovi_period, mu_alpha, beta0, beta1, gamma_alpha);
+  }
+
+    return(log(h/3) + log_sum_exp(lp));
+  }
+
+     }
+      data {
+      int <lower = 1> N; // number of total data
+      vector<lower = 0>[N] nt;
+      vector<lower = 0>[N] ntp1;
+      vector<lower = 0>[N] ovi_period;
+
+
+      real <lower = 0> m_scale;
+      real <lower = 0> beta0_loc;
+      real <lower = 0> beta0_scale;
+      real <lower = 0> beta1_loc;
+      real <lower = 0> beta1_scale;
+      real <lower = 0> gamma_alpha_loc;
+      real <lower = 0> gamma_alpha_scale;
+      }
+
+      parameters {
+      real <lower = 0> m_raw; 
+      real <lower = 0> beta0_raw; // cannibalism rate intercept (per adult, per egg)
+      real <lower = 0> beta1_raw;
+      real <lower = 0> gamma_alpha_raw; // noise in ntp1
+      vector<lower = 0>[N] ft;
+
+      }
+
+      transformed parameters {
+      // declarations
+      real <lower = 0> m; // parameter m = mu_alpha / beta0. The parameters mu_alpha and beta0 are highly correlated in posterior sampling, leading to divergences. The reparameterization to m prevents this
+      real <lower = 0> mu_alpha; // the population-level mean oviposition rate (per adult)
+      vector<lower = 0>[N] beta; // cannibalism rate (per adult, per egg)
+      real <lower = 0> beta0;
+      real <lower = 0> beta1;
+      real <lower = 0> gamma_alpha; // noise in ntp1
+      vector<lower = 0>[N] mu_zt;
+      vector<lower = 0>[N] sigma_zt;
+      //vector<lower = 0>[N] ft;
+
+
+      // rescale non-centered parameters
+      m = m_scale * m_raw;
+      beta0 = beta0_loc + beta0_scale * beta0_raw;
+      mu_alpha = m * beta0; 
+      beta1 = beta1_loc + beta1_scale * beta1_raw;
+      gamma_alpha = gamma_alpha_loc + gamma_alpha_scale * gamma_alpha_raw;
+
+      // true transformed params
+      beta = beta0 + nt * beta1;
+      //ft = nt ./ 2;
+      // larvae model
+      vector[N] focal_exponent = ft.*ovi_period.*beta;
+      
+      vector[N] t1 = -2 * focal_exponent;
+      vector[N] t2 = log(2) - focal_exponent;
+
+      mu_zt = mu_alpha * (1-exp(-focal_exponent)) ./ beta;
+      sigma_zt = sqrt( pow(gamma_alpha ./ beta, 2) .* (1 + exp(t1) - exp(t2)));
+
+      }
+
+      model {
+      // priors
+      m_raw ~ std_normal();
+      beta0_raw ~ std_normal();
+      beta1_raw ~ std_normal();
+      gamma_alpha_raw ~ exponential(1);
+      ft ~ normal(0.5 * nt, 0.5 * sqrt(nt));
+
+      // likelihood
+      for(i in 1:N)
+      {
+        ntp1[i] ~ normal(0.91*mu_zt[i], 0.91*sigma_zt[i]) T[0,];
+      }
+
+
+      }
+
+       generated quantities{
+       int M  = 100;
+      vector[N] log_lik;
+      for(i in 1:N)
+      {
+        log_lik[i] = log_lik_Simpson_f(ntp1[i], nt[i], ovi_period[i], mu_alpha, beta0, beta1, gamma_alpha, M);
+      }
+       }
+
+
+      ',
+
+        here("models/mod10_D2.stan"))
+```
+
+# Model 11
+env. stochasticity
+```{r}
+
+mod11_description <- "environmental stochasticity (oviposition)"
+
+write('
+
+      data {
+      int <lower = 1> N; // number of total data
+      vector<lower = 0>[N] nt;
+      vector<lower = 0>[N] ntp1;
+      vector<lower = 0>[N] ovi_period;
+
+
+      real <lower = 0> m_scale;
+      real <lower = 0> beta0_loc;
+      real <lower = 0> beta0_scale;
+      real <lower = 0> beta1_loc;
+      real <lower = 0> beta1_scale;
+      real <lower = 0> gamma_alpha_loc;
+      real <lower = 0> gamma_alpha_scale;
+      }
+
+      parameters {
+      real <lower = 0> m_raw; 
+      real <lower = 0> beta0_raw; // cannibalism rate intercept (per adult, per egg)
+      real <lower = 0> beta1_raw;
+      real <lower = 0> gamma_alpha_raw; // noise in ntp1
+      }
+
+      transformed parameters {
+      // declarations
+      real <lower = 0> m; // parameter m = mu_alpha / beta0. The parameters mu_alpha and beta0 are highly correlated in posterior sampling, leading to divergences. The reparameterization to m prevents this
+      real <lower = 0> mu_alpha; // the population-level mean oviposition rate (per adult)
+      vector<lower = 0>[N] beta; // cannibalism rate (per adult, per egg)
+      real <lower = 0> beta0;
+      real <lower = 0> beta1;
+      real <lower = 0> gamma_alpha; // noise in ntp1
+      vector<lower = 0>[N] mu_zt;
+      vector<lower = 0>[N] sigma_zt;
+      vector<lower = 0>[N] ft;
+
+
+      // rescale non-centered parameters
+      m = m_scale * m_raw;
+      beta0 = beta0_loc + beta0_scale * beta0_raw;
+      mu_alpha = m * beta0; 
+      beta1 = beta1_loc + beta1_scale * beta1_raw;
+      gamma_alpha = gamma_alpha_loc + gamma_alpha_scale * gamma_alpha_raw;
+
+      // true transformed params
+      beta = beta0 + nt * beta1;
+      ft = nt ./ 2;
+      // larvae model
+      vector[N] focal_exponent = ft.*ovi_period.*beta;
+      
+      vector[N] t1 = -2 * focal_exponent;
+      vector[N] t2 = log(2) - focal_exponent;
+
+      mu_zt = mu_alpha * (1-exp(-focal_exponent)) ./ beta;
+      sigma_zt = sqrt( pow(gamma_alpha ./ beta, 2) .* (1 + exp(t1) - exp(t2)));
+
+      }
+
+      model {
+      // priors
+      m_raw ~ std_normal();
+      beta0_raw ~ std_normal();
+      beta1_raw ~ std_normal();
+      gamma_alpha_raw ~ exponential(1);
+
+      // likelihood
+      for(i in 1:N)
+      {
+        ntp1[i] ~ normal(0.91*mu_zt[i], 0.91*sigma_zt[i]) T[0,];
+      }
+
+
+      }
+
+       generated quantities{
+      vector[N] log_lik;
+      for(i in 1:N)
+      {
+        log_lik[i] = normal_lpdf(ntp1[i] | 0.91*mu_zt[i], 0.91*sigma_zt[i]) - normal_lccdf(0 | 0.91*mu_zt[i], 0.91*sigma_zt[i]); 
+      }
+       }
+
+      ',
+
+        here("models/mod11_D2.stan"))
+```
+
+
+# Save model descriptions
+```{r}
+description_vec <- c(mod1_description, mod2_description, mod3_description, mod4_description, mod5_description, mod6_description, mod7_description, mod8_description, mod9_description, mod10_description, mod11_description)
+
+saveRDS(description_vec, file = here("models/description_vec.rds"))
+
+```
+

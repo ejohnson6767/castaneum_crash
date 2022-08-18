@@ -1,0 +1,12 @@
+model;elpd_diff;se_diff;description;notes
+5;0;0;demographic stochasticity (oviposition), and demographic heterogeneity (oviposition);
+1;-4.21;5.33;demographic stochasticity (oviposition), sex-ratio stochasticity;
+4;-4.68;5.26;demographic stochasticity (oviposition and cannibalism), sex-ratio stochasticity;
+6;-12.89;3.05;demographic stochasticity (oviposition);
+9;-12.95;5.03;demographic stochasticity (oviposition), sex-ratio stochasticity, and environmental stochasticity (oviposition);
+2;-24.6;7.33;demographic stochasticity (oviposition), sex-ratio stochasticity, and demographic heterogeneity (oviposition);
+3;-50.51;9.42;demographic stochasticity (oviposition) with temporal autocorrelation, sex-ratio stochasticity;
+10;-119.93;19.56;environmental stochasticity (oviposition), sex-ratio stochasticity;
+11;-297.65;20.74;environmental stochasticity (oviposition);
+7;-609.91;33.47;demographic heterogeneity (oviposition);
+8;-630.64;33.22;demographic heterogeneity (oviposition), sex-ratio stochasticity;

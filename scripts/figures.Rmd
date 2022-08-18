@@ -1,0 +1,949 @@
+---
+title: "figures"
+output: html_document
+---
+# Setup
+
+load packages, data, and cpp functions
+```{r}
+library(Rcpp)
+library(here)
+#sourceCpp(here("beetle_models_final_sourceCpp.cpp"))
+library(tidyverse)
+library(gtools)
+library(HDInterval)
+library(RColorBrewer)
+library(latex2exp)
+library(ggpubr)
+library(scales)
+library(gridExtra)
+library(grid)
+library(cmdstanr)
+library(shinystan)
+library(loo)
+library(bayesplot)
+library(rstan)
+# devtools::install_github("eliocamp/tagger")
+library(tagger)
+
+dat <- read.csv(here("all_data_castaneum_crash.csv")) %>% drop_na(nt, ntp1)
+source(here("scripts/support_functions.R"))
+source(here("scripts/stan_utility.R"))
+rnormt(1, range = c(0,Inf), 10,1)
+
+
+# plotting params
+axis_title_size <- 24
+axis_text_size <- 14
+legend_title_size <- 24
+legend_text_size <- 24
+title_size <- 24
+
+```
+
+
+# figure 1
+
+```{r}
+# Hypothetical parameters
+mu_alpha = 16.5
+beta0 = 0.012
+beta1 = 1.5e-5
+eta_alpha = 22
+thresh_length = 100
+gamma0 = 1000
+gamma1 = 0.001
+sigma_zStar = 100
+epsilon_H = 0.001
+theta_L = 0.91
+ovi_period <- 7
+
+# make fake data
+nt <- seq(1, 1500, by = 1)
+ft <- nt/2
+beta <- beta0 + beta1 * nt
+focal_exponent <- ft * ovi_period * beta
+mu_zt <- mu_alpha * (1-exp(- focal_exponent)) / beta
+lt <- theta_L * mu_zt
+z_star <- gamma0 - gamma1*(nt)
+theta <- (theta_L  - theta_L/(1 + exp(-(5.8889/thresh_length) * (mu_zt -  z_star))))
+ntp1 <- mu_zt * theta
+fig1_dat <- data.frame(nt = nt, lt = lt, ntp1 = ntp1)
+
+# plotting parameters
+ylab_just <- -0.35
+top_margin <- 50
+
+# make panels
+fig1_panel1 <- fig1_dat %>%
+  ggplot(aes(x = nt, y = lt)) +
+  geom_line(size = 3) + 
+  xlab("adults(t)") + 
+  ggtitle("larvae(t)") +
+  scale_x_continuous(trans = "log10", limits = c(1, max(nt)*1.1), expand = c(0,0)) + 
+  scale_y_continuous( limits = c(1, max(lt)*1.1), expand = c(0,0)) +
+  theme_classic() +
+  theme(plot.title = element_text(size = axis_title_size, hjust = ylab_just+0.1),
+        axis.title.x = element_text(size = axis_title_size),
+        axis.title.y = element_blank(),
+        axis.text = element_text(size = axis_text_size))
+
+fig1_panel2 <- fig1_dat %>%
+  ggplot(aes(x = lt, y = ntp1)) +
+  geom_line(size = 3) + 
+  xlab("larvae(t)") + 
+  ggtitle("adults(t+1)") +
+  scale_x_continuous(limits = c(fig1_dat$lt[1], NA), expand = c(0,0)) + 
+  scale_y_continuous(limits = c(0, max(ntp1)*1.1), expand = c(0,0)) +
+  theme_classic() +
+  theme(plot.title = element_text(size = axis_title_size, hjust = ylab_just),
+        axis.title.x = element_text(size = axis_title_size),
+        axis.title.y = element_blank(),
+        axis.text = element_text(size = axis_text_size))
+
+fig1_panel3 <-  fig1_dat %>%
+  ggplot(aes(x = nt, y = ntp1)) +
+  geom_line(size = 3) + 
+  xlab("adults(t)") + 
+  ggtitle("adults(t+1)") +
+  scale_x_continuous(trans = "log10", limits = c(1, max(nt)*1.1), expand = c(0,0)) + 
+  scale_y_continuous(limits = c(0, max(ntp1)*1.1), expand = c(0,0)) +
+  theme_classic() +
+  theme(plot.title = element_text(size = axis_title_size, hjust = ylab_just),
+        axis.title.x = element_text(size = axis_title_size),
+        axis.title.y = element_blank(),
+        axis.text = element_text(size = axis_text_size))
+
+# grob list
+gl <- list(fig1_panel1, circleGrob(y = 0.525, r=unit(0.3,"npc"), gp = gpar(lwd = 8)),  fig1_panel2, grid.text(TeX('$=$') , gp=gpar(fontsize=150)), fig1_panel3)
+
+
+# ggpobr:ggarrange solution
+p <- ggarrange(plotlist = gl,
+          nrow = 1, 
+          widths = c( 3, 1,3, 1, 3),
+          labels = c("(a)", NA, "(b)", NA, "(c)"),
+          hjust = -0.2,
+          vjust = -1,
+          font.label = list(size = axis_title_size)) +  
+  theme(plot.margin = margin(t = 40, r = 10, b = 0, l = 20, unit = "pt"))
+
+# save high quality tiff
+tiff(here("figures/fig1.tiff"), units="in", width=15, height=5, res=500)
+ggarrange(plotlist = gl,
+          nrow = 1, 
+          widths = c( 3, 1,3, 1, 3),
+          labels = c("(a)", NA, "(b)", NA, "(c)"),
+          hjust = -0.2,
+          vjust = -1,
+          font.label = list(size = axis_title_size)) +  
+  theme(plot.margin = margin(t = 40, r = 10, b = 0, l = 20, unit = "pt"))
+dev.off()
+
+
+png(here("figures/fig1.png"), units="in", width=15, height=5, res=500)
+ggarrange(plotlist = gl,
+          nrow = 1, 
+          widths = c( 3, 1,3, 1, 3),
+          labels = c("(a)", NA, "(b)", NA, "(c)"),
+          hjust = -0.2,
+          vjust = -1,
+          font.label = list(size = axis_title_size)) +  
+  theme(plot.margin = margin(t = 40, r = 10, b = 0, l = 20, unit = "pt"))
+dev.off()
+
+```
+
+
+# figure 2
+```{r}
+# load in data, convert chaff_presence (a large number of dead larval skins) to a factor.
+dat <- read.csv(here("all_data_castaneum_crash.csv")) %>%
+  mutate(chaff_presence = as.factor(chaff_presence))
+
+# prep data
+dat1 <- dat %>%
+  filter(exp_name %in% c("storing_sex_A", "castaneum_chaos", "cc_cold", "corridor", "corridor_eggs"), 
+         oviposition_days >= 7) %>%
+  mutate(dataset = as.factor(case_when(
+ exp_name %in% c("cc_cold") ~ "D1",
+ exp_name %in% c("storing_sex_A", "castaneum_chaos") ~ "D2",
+ exp_name %in% c("corridor", "corridor_eggs") ~ "D3")))
+         
+
+
+fig2_panel1 <- dat1 %>%
+  filter(dataset %in% c("D1"),
+         !is.na(chaff_presence)) %>%
+  mutate(chaff_presence = ifelse(chaff_presence == 1,"yes", "no")) %>%
+  ggplot(aes(x = nt, y = ntp1, color = chaff_presence, size = chaff_presence)) +
+  geom_jitter(position=position_jitter(0.2)) +
+  guides(color=guide_legend("Dead larvae\npresent?"), size=guide_legend("Dead larvae\npresent?")) +
+  scale_x_continuous(trans = 'log2', breaks = 2^seq(2,10, by = 2))  +
+  scale_y_continuous( limits = c(0, 600)) +
+  theme_bw() + 
+  theme(legend.text = element_text(size = legend_text_size),
+        legend.title = element_text(size = legend_title_size),
+        axis.title = element_blank(),
+        axis.text = element_text(size = axis_text_size))+
+  scale_color_manual(values = c("black", "red")) + 
+  scale_size_manual(values = c(1,3))
+
+fig2_panel2 <- dat1 %>%
+  filter(dataset %in% c("D2"),
+         !is.na(chaff_presence)) %>%
+  mutate(chaff_presence = ifelse(chaff_presence == 1,"yes", "no")) %>%
+  ggplot(aes(x = nt, y = ntp1, color = chaff_presence, size = chaff_presence)) +
+  geom_jitter(position=position_jitter(0.2)) +
+  guides(color=guide_legend("Dead larvae\npresent?"), size=guide_legend("Dead larvae\npresent?")) +
+  scale_x_continuous(trans = 'log2', breaks = 2^seq(2,10, by = 2))  +
+  scale_y_continuous( limits = c(0, 600)) +
+  theme_bw() + 
+  theme(legend.text = element_text(size = legend_text_size),
+        legend.title = element_text(size = legend_title_size),
+        axis.title = element_blank(),
+        axis.text.x = element_text(size = axis_text_size),
+        axis.text.y = element_blank())+
+  scale_color_manual(values = c("black", "red")) + 
+  scale_size_manual(values = c(1,3))
+
+
+dat2 <- dat1 %>% 
+  filter(dataset == "D3") %>%
+  pivot_longer(c("ntp1", "output_eggs"), names_to = "output_type", values_to = "output") %>%
+  mutate(output_type = as.factor(output_type)) %>%
+  drop_na(output, output_type, nt)
+
+fig2_panel3 <- dat2 %>%
+  ggplot(aes(x = nt, y = output, color = output_type, group = output_type, size = output_type)) +
+  geom_point(position=position_jitter(0.1)) +
+  guides(color= guide_legend("Output type"), size=guide_legend("Output type")) +
+  scale_x_continuous(trans = 'log2', limits = c(3, 1024),  breaks = 2^seq(2,10, by = 2))  +
+  theme_bw() + 
+  theme(legend.text = element_text(size = legend_text_size),
+        legend.title = element_text(size = legend_title_size),
+        axis.title = element_blank(),
+        axis.text.x = element_text(size = axis_text_size),
+        axis.text.y =element_text(size = axis_text_size),
+        legend.text.align = 0) +
+    scale_size_manual(values = c(1,3),labels = c(TeX(sprintf("$adults \\equiv n(t+1)$")),"eggs")) +
+  scale_color_manual(labels = c(TeX(sprintf("$adults \\equiv n(t+1)$")),"eggs"), values = c( "black", "purple"))
+
+
+# Create a figure by combining the different plots
+fig2v1 <- ggarrange(fig2_panel1, fig2_panel2, 
+                  labels = c("(a)", "(b)"), 
+                  nrow = 1, 
+                  vjust = -1,
+                  hjust = c(-1,0),
+                  common.legend = TRUE, 
+                  legend = "right", 
+                  font.label = list(size = title_size, face = "plain")) +  
+                  theme(plot.margin = margin(t = 40, r = 0, b = 0, l = 0, unit = "pt"))
+
+
+# Annotate the figure by adding a common labels
+fig2v1 <- annotate_figure(fig2v1, 
+                left = textGrob("n(t+1)", rot = 90, hjust = 0, vjust = 0.5, gp = gpar(fontsize = axis.title_size)), bottom =textGrob("n(t)", hjust = 2, vjust = 0, gp = gpar(fontsize = axis_title_size)))
+
+
+
+# Create a figure by combining the different plots
+fig2v2 <- ggarrange(fig2_panel3,
+                  labels = c("(c)"), 
+                  nrow = 1, 
+                  vjust = -1,
+                  hjust = -1.25,
+                  common.legend = TRUE, 
+                  legend = "right", 
+                  font.label = list(size = title_size, face = "plain")) +  
+                  theme(plot.margin = margin(t = 40, r = 5, b = 0, l = 0, unit = "pt"))
+# Annotate the figure by adding a common labels
+fig2v2 <- annotate_figure(fig2v2, 
+                left = textGrob("Output", rot = 90, hjust = 0, vjust = 0.5, gp = gpar(fontsize = axis_title_size)), bottom =textGrob("n(t)", hjust = 2, vjust = 0, gp = gpar(fontsize = axis_title_size)))
+
+
+blank <- grid.rect(gp=gpar(col="white"))
+
+fig2 <- ggarrange(fig2v1, blank, fig2v2, nrow =1, widths = c(6,0.1,4.25))
+
+# save high quality tiff
+tiff(here("figures/fig2.tiff"), units="in", width=15, height=5, res=500)
+fig2
+dev.off()
+
+# save high quality png
+png(here("figures/fig2.png"), units="in", width=15, height=5, res=500)
+fig2
+dev.off()
+```
+
+
+# figure 3
+
+```{r}
+# Create a figure by combining the different plots
+reds <- brewer.pal(9, "Reds")
+
+panel1 <- readRDS(file = here("figures/fig2_panelA.rds"))
+panel2 <- readRDS(file = here("figures/fig2_panelB.rds"))
+panel3 <- readRDS(file = here("figures/fig2_panelC.rds"))
+
+figure3 <- ggarrange(panel1, panel2, panel3, labels = c("(a)", "(b)", "(c)"),        
+                     hjust = 0,
+          vjust = -0.5, nrow = 1, common.legend = TRUE, legend = "right", font.label = list(size = title_size, face = "plain"))
+# Annotate the figure by adding a common labels
+
+
+arrow_dat <- data.frame(x = 0.1, xend = 0.8, y = 1.15, yend = 1.15)
+figure3 <- figure3 + geom_segment(data = arrow_dat,
+                      aes(x=x,y=y,xend=xend,yend=yend),
+                      size = 2,
+                      arrow = arrow(length = unit(0.75,"cm")),
+                      lineend = "round",
+                      linejoin='mitre')
+
+figure3 <- annotate_figure(figure3,
+                           bottom = text_grob(expression(n(t)), size = axis_title_size),
+                           left = text_grob(expression(n(t+1)), size =  axis_title_size), 
+                           top = text_grob(as.expression(bquote(paste("Scaled average distance to population crashes, Mean \U00B1 SD = "))), size = title_size, vjust = -1.5, hjust = 0.6)) + 
+                           theme(plot.margin = unit(c(2,1,1,1), "cm"))
+figure3
+
+
+# save high quality tiff
+tiff(here("figures/fig3.tiff"), units="in", width=18, height=6, res=500)
+figure3
+dev.off()
+
+# save high quality png
+png(here("figures/fig3.png"), units="in", width=18, height=6, res=500)
+figure3
+dev.off()
+```
+
+
+# functions for simulations
+
+```{r}
+
+rnormt <- possibly(.f = rnormt, otherwise = 0)
+
+sim_stoch<- function(pars, input_dat)
+{
+  # prep
+  nt <- input_dat[["nt"]]
+  oviposition_days <- input_dat[["oviposition_days"]]
+  theta_L <- pars[["theta_L"]]
+  epsilon_H <- pars[["epsilon_H"]]
+  epsilon_L = sqrt((1-theta_L)*theta_L)
+
+  N <- length(nt)
+  ft <- rbinom(N, size = nt, prob = 0.5)
+
+  # first simulate random z_star from truncated normal dist
+  mu_zStarReal <-  pars[["gamma0"]] - pars[["gamma1"]] * nt
+
+  z_star <- rnormt(N, range = c(0, Inf), m = mu_zStarReal, s = pars[["sigma_zStar"]])
+  
+  # calculate moments of eggs distribution
+  beta = pars[["beta0"]] + pars[["beta1"]] * nt
+  mu_zt = pars[["mu_alpha"]] * (1-exp(- ft * oviposition_days * beta)) / beta
+  sigma_zt = pars[["eta_alpha"]] * sqrt( (1- exp(-2 * ft * oviposition_days * beta)) / (2 * beta))
+  
+  #simulate eggs
+  zt <- round(rnormt(N, range = c(0, Inf), m = mu_zt, s = sigma_zt))
+
+  # simulate ntp1 asdf
+  mu_theta <- theta_L  - theta_L/(1 + exp(-(6/pars[["thresh_length"]]) * (zt - z_star)))
+  sigma_theta <- (epsilon_L)  -  (epsilon_L - epsilon_H)/(1 + exp(-(6/pars[["thresh_length"]]) * (zt - z_star)))
+
+  ntp1 <- round(rnormt(N, range = c(0, Inf), m = zt*mu_theta, s = sqrt(zt) * sigma_theta))
+  #ntp1[which(ntp1 < 0)] <- 0
+  
+  return(ntp1)
+}
+
+sim_det<- function(pars, input_dat)
+{
+  # prep
+  nt <- input_dat[["nt"]]
+  oviposition_days <- input_dat[["oviposition_days"]]
+  theta_L <- pars[["theta_L"]]
+  epsilon_H <- pars[["epsilon_H"]]
+  epsilon_L = sqrt((1-theta_L)*theta_L)
+
+  N <- length(nt)
+  ft <- nt/2
+
+  # first simulate random z_star from truncated normal dist
+  mu_zStarReal <-  pars[["gamma0"]] - pars[["gamma1"]] * nt
+
+  # calculate moments of eggs distribution
+  beta = pars[["beta0"]] + pars[["beta1"]] * nt
+  mu_zt = pars[["mu_alpha"]] * (1-exp(- ft * oviposition_days * beta)) / beta
+
+  #simulate eggs
+
+  # simulate ntp1 asdf
+  mu_theta <- theta_L  - theta_L/(1 + exp(-(6/pars[["thresh_length"]]) * (mu_zt - mu_zStarReal)))
+
+  ntp1 <-  mu_zt*mu_theta
+  #ntp1[which(ntp1 < 0)] <- 0
+  
+  return(ntp1)
+}
+
+
+sim_det_im <- function(pars, input_dat)
+{
+  return(sim_det(pars, input_dat) + input_dat[["im"]])
+}
+
+sim_stoch_im <- function(pars, input_dat)
+{
+  return(sim_stoch(pars, input_dat) + input_dat[["im"]])
+}
+
+```
+
+# figure 4
+
+```{r}
+sim_ts <- function(model_name, pars, oviposition_days, nt_init, t_max, im = 0)
+{
+  res <- numeric(t_max+1)
+  res[1] <- nt_init
+  
+  for(i in 1:t_max)
+  {
+    cur_input_dat <- list(nt = res[i], oviposition_days = oviposition_days, im = im)  
+    res[i+1] <- model_name(pars, cur_input_dat)
+  }
+  return(res)
+}
+
+get_panel_dat <- function(model_name, bifur_vec, num_points, t_max, ts_per_bifur, pars, oviposition_days, nt_init_fun, im = 0)
+{
+res_mat <- matrix(NA, nrow = num_points*ts_per_bifur*length(bifur_vec), ncol =2)
+row_ind <- 1
+for(i in seq_along(bifur_vec))
+{
+  pars[["mu_alpha"]] <- bifur_vec[i]
+  for(j in 1:ts_per_bifur)
+  {    
+    temp_dat <- (sim_ts(model_name, pars, oviposition_days, nt_init_fun(), t_max, im))[(t_max - num_points+1):t_max]
+    res_mat[row_ind:(row_ind+num_points-1),2] <- temp_dat
+    res_mat[row_ind:(row_ind+num_points-1),1] <- rep(bifur_vec[i], num_points)
+    row_ind <- row_ind + num_points
+  }
+}
+
+res <- as.data.frame(res_mat)
+colnames(res) <- c("mu_alpha", "n")
+return(res)
+}
+
+
+# model parameters
+# sfit <- readRDS(file = here("model_fits/sfit_full_D2.stan"))
+# par_names <-   c("mu_alpha", "beta0", "beta1", "eta_alpha", "thresh_length", "gamma0", "gamma1", "sigma_zStar", "epsilon_H")
+# fit_summary <- summary(sfit, pars = par_names)
+# pars <- fit_summary$summary[par_names,"mean"]
+# pars[["theta_L"]] <- 0.91
+
+sfit <- readRDS(file = here("model_fits/sfit_full_D3.stan"))
+par_names <-   c("mu_alpha", "beta0", "beta1", "eta_alpha", "thresh_length", "gamma0", "gamma1", "sigma_zStar")
+fit_summary <- summary(sfit, pars = par_names)
+pars <- fit_summary$summary[par_names,"mean"]
+pars[["theta_L"]] <- 0.91
+pars[["epsilon_H"]] <- 0
+
+# simulation parameters
+bifur_vec_det <- seq(11,16,0.005)
+bifur_vec_stoch <- seq(11,16,0.005)
+oviposition_days <- 7
+theta_L <- 0.91
+im <- 1
+sim_det <- sim_det
+sim_stoch <- sim_stoch
+sim_det_im <- sim_det_im
+sim_stoch_im <- sim_stoch_im
+
+
+# long-term sim params
+ts_per_bifur_long <- 4
+num_points_long <- 200
+t_max_long <- 500
+nt_init_long_fun <- function(){sample(1:100, size=1)}
+
+# test params
+# temp <- get_panel_dat(sim_det, bifur_vec_det, num_points_long, t_max_long, ts_per_bifur_long, pars, oviposition_days, lowZtSurvivalProb, highZtSurvivalProb, nt_init_long_fun)
+# temp %>% ggplot(aes(x = mu_alpha, y = n)) + geom_point()
+# nrow(temp)
+
+# short-term sim params
+num_points_short <- 5
+ts_per_bifur_short <- round((num_points_long*ts_per_bifur_long)/num_points_short)
+t_max_short <- 20
+nt_init_short_fun <- function(){sample(1:100, size=1)}
+
+# plotting/data storage parameters
+long_term_name <- "Long-term"
+short_term_name <- "Short-term"
+immigration_name <- "Long-term w/ immigration"
+deterministic_name <- "Deterministic"
+stochastic_name <- "Stochastic"
+
+fig3_dat <- data.frame(matrix(ncol = 4, nrow = 0))
+colnames(fig3_dat) <- c("mu_alpha", "n", "treatment", "stoch_factor")
+# panel 1
+# debug(ntp1_sim_cc_warm_det)
+# undebug(ntp1_sim_cc_warm_det)
+temp <- get_panel_dat(sim_det, bifur_vec_det, num_points_long, t_max_long, ts_per_bifur_long, pars, oviposition_days, nt_init_long_fun)
+temp$treatment <- long_term_name
+temp$stoch_factor <- deterministic_name
+fig3_dat <- rbind(fig3_dat, temp)
+# panel 2  
+# debug(ntp1_sim_mod22)
+# undebug(ntp1_sim_mod22)
+temp <- get_panel_dat(sim_stoch, bifur_vec_stoch, num_points_long, t_max_long, ts_per_bifur_long, pars, oviposition_days, nt_init_long_fun)
+temp$treatment <- long_term_name
+temp$stoch_factor <- stochastic_name
+fig3_dat <- rbind(fig3_dat,temp)
+# temp %>% ggplot(aes(x = mu_alpha, y = n)) +
+#   geom_point(alpha = 0.1)
+# panel 3
+temp <- get_panel_dat(sim_det, bifur_vec_det, num_points_short, t_max_short, ts_per_bifur_short, pars, oviposition_days, nt_init_short_fun)
+temp$treatment <- short_term_name
+temp$stoch_factor <- deterministic_name
+fig3_dat <- rbind(fig3_dat,temp)
+# panel 4  
+temp <- get_panel_dat(sim_stoch, bifur_vec_stoch, num_points_short, t_max_short, ts_per_bifur_short, pars, oviposition_days, nt_init_short_fun)
+temp$treatment <- short_term_name
+temp$stoch_factor <- stochastic_name
+fig3_dat <- rbind(fig3_dat,temp)
+# panel 5
+temp <- get_panel_dat(sim_det_im, bifur_vec_det, num_points_long, t_max_long, ts_per_bifur_long, pars, oviposition_days, nt_init_long_fun, im = im)
+temp$treatment <-  immigration_name
+temp$stoch_factor <- deterministic_name
+fig3_dat <- rbind(fig3_dat,temp)
+# panel 6  
+temp <- get_panel_dat(sim_stoch_im, bifur_vec_stoch, num_points_long, t_max_long, ts_per_bifur_long, pars, oviposition_days, nt_init_long_fun, im = im)
+temp$treatment <- immigration_name
+temp$stoch_factor <- stochastic_name
+fig3_dat <- rbind(fig3_dat,temp)
+# post-processesing
+fig3_dat$treatment <- as.factor(fig3_dat$treatment)
+fig3_dat$stoch_factor <- as.factor(fig3_dat$stoch_factor)
+fig3_dat <- within(fig3_dat, treatment <- factor(treatment, levels = c(long_term_name, short_term_name, immigration_name))) # reorder factors
+#str(fig3_dat)
+#glimpse(fig3_dat)
+
+
+
+# plot
+# p <- fig3_dat %>%
+#   ggplot(aes(x = mu_alpha, y = n)) +
+#   geom_point(alpha = 0.01, shape=16, size = 0.5) +
+#   facet_grid(treatment ~ stoch_factor, labeller = label_wrap_gen(width = 15)) + 
+#   xlab(TeX("Oviposition rate $\\left(\\frac{eggs}{day}\\right)$")) +
+#   ylab("Population abundance") +
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(),
+#         panel.grid.minor = element_blank(),
+#         axis.text = element_text(size = axis_text_size),
+#         strip.text = element_text(size = axis_title_size, vjust = 1), 
+#         axis.title.x = element_text(size = axis_title_size),
+#         axis.title.y = element_text(size = axis_title_size)) +
+#   tag_facets(tag_prefix = "(") + 
+#   theme(tagger.panel.tag.background = element_rect(fill = "White"))
+# 
+# p
+# 
+# 
+# tiff(here("fig4.tiff"), units="in", width=10, height=10, res=500)
+# fig3_dat %>%
+#   ggplot(aes(x = mu_alpha, y = n)) +
+#   geom_point(alpha = 0.01, shape=16, size = 0.5) +
+#   facet_grid(treatment ~ stoch_factor, labeller = label_wrap_gen(width = 15)) + 
+#   xlab(TeX("Oviposition rate $\\left(\\frac{eggs}{day}\\right)$")) +
+#   ylab("Population abundance") +
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(),
+#         panel.grid.minor = element_blank(),
+#         axis.text = element_text(size = axis_text_size),
+#         strip.text = element_text(size = axis_title_size, vjust = 1), 
+#         axis.title.x = element_text(size = axis_title_size),
+#         axis.title.y = element_text(size = axis_title_size)) +
+#   tag_facets(tag_prefix = "(") + 
+#   theme(tagger.panel.tag.background = element_rect(fill = "White"))
+# dev.off()
+
+png(here("figures/fig4.png"), units="in", width=10, height=10, res=500)
+fig3_dat %>%
+  ggplot(aes(x = mu_alpha, y = n)) +
+  geom_point(alpha = 0.01, shape=16, size = 0.5) +
+  facet_grid(treatment ~ stoch_factor, labeller = label_wrap_gen(width = 15)) + 
+  xlab(TeX("Oviposition rate $\\left(\\frac{eggs}{day}\\right)$")) +
+  ylab("Population abundance") +
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(size = axis_text_size),
+        strip.text = element_text(size = axis_title_size, vjust = 1), 
+        axis.title.x = element_text(size = axis_title_size),
+        axis.title.y = element_text(size = axis_title_size)) +
+  tag_facets(tag_prefix = "(") + 
+  theme(tagger.panel.tag.background = element_rect(fill = "White"))
+dev.off()
+
+```
+
+
+# figure 5
+
+```{r}
+# select parameter values
+b <- 5
+s <- 0.1
+k <- 0.15
+xBar <- 0.9
+sigma <- 0.1
+
+# define deterministic one-generation population map
+f <- function(x){
+(x/(k + x)) * exp(-((exp((x - xBar)/s))^b))
+}
+# define stochastic one-generation population map
+fn <- function(x){
+  y <- (x/(k + x)) * exp(-((exp((x - xBar)/s))^b)) + sigma*rnorm(length(x))
+  # noise is gaussian but population density is restricted between 0 and 1.
+  y[which(y<0)] <- 0 
+  #y[which(y>1)] <- 1 
+  return(y)
+}
+
+# make simulated data
+x <- seq(0, 1, by = 0.001)
+set.seed(20)
+df <- tibble(x = x, f = f(x), fn = fn(x)) %>%
+  mutate(fn2 = fn(fn))
+
+# make panels
+fig5_panel1 <-  df %>% ggplot(aes(x = x, y = f)) + 
+  geom_line(size = 2) + 
+  xlab("n(t)") + 
+  ylab("n(t+1)") + 
+  ggtitle("Deterministic 1-step") +
+  scale_x_continuous(limits = c(0, 1)) + 
+  scale_y_continuous( limits = c(0, 1)) +
+  theme_classic() +
+  theme(plot.title = element_text(size = axis_title_size, hjust = 0.5),
+        axis.title.x = element_text(size = axis_title_size),
+        axis.title.y = element_text(size = axis_title_size),
+        axis.text = element_text(size = axis_text_size))
+
+
+fig5_panel2 <-  df %>% ggplot(aes(x = x, y = fn)) +
+  geom_point(size = 1, pch = 16, alpha = 1) + 
+  xlab("n(t)") + 
+  ylab("n(t+1)") + 
+  ggtitle("Stochastic 1-step") +
+  scale_x_continuous(limits = c(0, 1)) + 
+  scale_y_continuous( limits = c(0, 1)) +
+  theme_classic() +
+  theme(plot.title = element_text(size = axis_title_size, hjust = 0.5),
+        axis.title.x = element_text(size = axis_title_size),
+        axis.title.y = element_text(size = axis_title_size),
+        axis.text = element_text(size = axis_text_size))
+
+fig5_panel3 <-  df %>% ggplot(aes(x = x, y = fn2)) +
+  geom_point(size = 1, pch = 16, alpha = 1) + 
+  xlab("n(t)") + 
+  ylab("n(t+2)") + 
+  ggtitle("Stochastic 2-step") +
+  scale_x_continuous(limits = c(0, 1)) + 
+  scale_y_continuous( limits = c(0, 1)) +
+  theme_classic() +
+  theme(plot.title = element_text(size = axis_title_size, hjust = 0.5),
+        axis.title.x = element_text(size = axis_title_size),
+        axis.title.y = element_text(size = axis_title_size),
+        axis.text = element_text(size = axis_text_size))
+
+# grob list
+gl <- list(fig5_panel1, fig5_panel2, fig5_panel3)
+
+# gridExtra::grid.arrange solution
+# grid.arrange(
+#   grobs = gl,
+#   widths = c(.5, 3, 1, 3, 1, 3),
+#   layout_matrix = rbind(c(NA,1, 2, 3, 4, 5)))
+ 
+# ggpoubr:ggarrange solution
+ggarrange(plotlist = gl,
+          nrow = 1, 
+          labels = c("(a)", "(b)", "(c)"),
+          hjust = -1,
+          vjust = -1,
+          font.label = list(size = axis_title_size)) +  
+  theme(plot.margin = margin(t = 40, r = 10, b = 0, l = 20, unit = "pt"))
+
+# save high quality tiff
+tiff(here("figures/fig5.tiff"), units="in", width=15, height=5, res=500)
+ggarrange(plotlist = gl,
+          nrow = 1, 
+          labels = c("(a)", "(b)", "(c)"),
+          hjust = -1,
+          vjust = -1,
+          font.label = list(size = axis_title_size)) +  
+  theme(plot.margin = margin(t = 40, r = 10, b = 0, l = 20, unit = "pt"))
+dev.off()
+
+# save high quality png
+png(here("figures/fig5.png"), units="in", width=15, height=5, res=500)
+ggarrange(plotlist = gl,
+          nrow = 1, 
+          labels = c("(a)", "(b)", "(c)"),
+          hjust = -1,
+          vjust = -1,
+          font.label = list(size = axis_title_size)) +  
+  theme(plot.margin = margin(t = 40, r = 10, b = 0, l = 20, unit = "pt"))
+dev.off()
+```
+
+# Figure S1
+```{r}
+
+dat <- read.csv(here("all_data_castaneum_crash.csv"))
+dat$chaff_presence <- as.factor(dat$chaff_presence)
+
+dat5 <-dat %>%
+  filter(exp_name %in% c("castaneum_chaos", "storing_sex_A")) %>%
+  mutate(oviposition_days = ifelse(oviposition_days > 7, 7, oviposition_days)) %>%
+  filter(nt > 128)
+
+dat6 <- dat5 %>%
+  mutate(crash = if_else(ntp1<=50, 1, 0)) %>%
+  group_by(nt, oviposition_days) %>%
+  summarize(total = n(), 
+            n_crash = sum(crash),
+            frac_crash = n_crash/total,
+            se = sqrt(frac_crash*(1-frac_crash)/total) )
+
+S1 <- dat6 %>% 
+  ggplot(aes(x = nt, y = frac_crash, color = as.factor(oviposition_days))) +
+  geom_line(lwd = 1.5) + 
+  geom_point(size = 4) + 
+  xlab("n(t)") + 
+  ylab(expression(paste("Crash frequency, ", Freq(n(t+1) < 50) ))) + 
+  theme(strip.text = element_text(size=axis_title_size),
+        legend.text = element_text(size = legend_text_size),
+        legend.title = element_text(size = legend_title_size),
+        axis.title = element_text(size = axis_title_size-4),
+        axis.text = element_text(size = axis_text_size)) +
+  labs(color = "Oviposition period \n(Days)")
+
+# save high quality tiff
+tiff(here("figures/figS1.tiff"), units="in", width=10, height=7, res=500)
+S1
+dev.off()
+
+# save high quality png
+png(here("figures/figS1.png"), units="in", width=10, height=7, res=500)
+S1
+dev.off()
+
+```
+
+```{r}
+
+dat <- read.csv(here("all_data_castaneum_crash.csv"))
+dat$chaff_presence <- as.factor(dat$chaff_presence)
+
+dat5 <-dat %>%
+  filter(exp_name %in% c("castaneum_chaos", "storing_sex_A")) %>%
+  mutate(oviposition_days = ifelse(oviposition_days > 7, 7, oviposition_days)) %>%
+  filter(oviposition_days == 1) %>%
+  group_by(nt) %>%
+  summarize(m = mean(ntp1), sd =sd(ntp1)) %>%
+  View()
+
+p <- 0.91
+sqrt((17/p)*p*(1-p))
+
+```
+
+
+# figure S2
+```{r}
+dat <- read.csv(here("all_data_castaneum_crash.csv"))
+
+# prep data
+dat1 <- dat %>%
+  filter(exp_name %in% c("storing_sex_A", "castaneum_chaos"),
+         nt <= 50,
+         (oviposition_days == 1 | oviposition_days >= 7),
+         !(oviposition_days == 1 & ntp1 > 125),
+         !(oviposition_days >= 7 & nt  > 30))
+dat1$exp_name <- factor(dat1$exp_name, levels = c("storing_sex_A", "castaneum_chaos"), labels = c("Oviposition period: 1 day", "Oviposition period: 7 days"))
+
+top_panel <- dat1 %>% drop_na(nt, ntp1) %>%
+  ggplot(aes(x = nt, y = ntp1)) +
+  geom_point(position=position_jitter(0.1)) + 
+  scale_x_continuous(breaks = c(5, 10, 20, 30, 50))  +
+  xlab("n(t)") + 
+  ylab("n(t+1)") + 
+  theme(strip.text = element_text(size = axis_title_size),
+        axis.text = element_text(size = axis_text_size),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(angle = 90, vjust = 0.5, size = axis_title_size),                   plot.margin = margin(t = 0, r = 5, b = 0, l = 0, unit = "pt")) +
+  facet_wrap(~exp_name, scales = "free")
+
+
+# formula for standard error of the sample variance, by Rao 1973 section 6.a.2.4
+dat2 <- dat1 %>% group_by(exp_name, nt) %>%
+  drop_na(nt, ntp1) %>%
+  summarize(n = n(),
+         sigma = sd(ntp1),
+         mu4 = mean((ntp1-mean(ntp1))^4),
+         var = var(ntp1),
+         se_var = sqrt((1/n)*(mu4 - sigma^4 * ((n-3)/(n-1)) )))
+
+
+bottom_panel <- dat2 %>% 
+  ggplot(aes(x = nt, y = var, ymin = var + 2*se_var, ymax = var - 2*se_var)) +
+  geom_point(pch = 1) + 
+  geom_line() + 
+  geom_ribbon(alpha = 0.2) + 
+  scale_x_continuous(breaks = c(5, 10, 20, 30, 50))  +
+  xlab("n(t)") + 
+  ylab("Var(n(t+1))") + 
+  theme(strip.text = element_blank(),
+        axis.title = element_text(size = axis_title_size),
+        axis.text = element_text(size = axis_text_size),
+        axis.title.y = element_text(angle = 90, vjust = 0.5),
+        plot.margin = margin(t = 0, r = 5, b = 0, l = 0, unit = "pt")) +
+  facet_wrap(~ exp_name, scales = "free")
+
+figS2 <- ggarrange(top_panel, bottom_panel, nrow = 2, align = "hv")
+
+# save high quality tiff
+tiff(here("figures/figS2.tiff"), units="in", width=10, height=10, res=500)
+figS2
+dev.off()
+
+# save high quality png
+png(here("figures/figS2.png"), units="in", width=10, height=10, res=500)
+figS2
+dev.off()
+```
+
+
+# figure S3, S4, and S5 but with per capita growth rates
+```{r}
+dat <- read.csv(here("all_data_castaneum_crash.csv"))
+
+# prep data
+dat1 <- dat %>%
+  filter(exp_name %in% c("storing_sex_A", "castaneum_chaos"),
+         oviposition_days >= 7,
+         nt < 400,
+         nt >= 12) %>%
+  drop_na(nt, ntp1)
+
+dat2 <- dat1 %>% mutate(
+                r = log(ntp1/nt),
+                m = mean(r),
+                tail = ifelse(r > m, "Right tail", "Left tail"),
+                dev = abs(r-m),
+                log_dev = log(dev))
+
+S3 <- dat2 %>% ggplot(aes(x = r)) + 
+  geom_histogram() + 
+  xlab("Per capita growth rate") + 
+  ylab("Count") + 
+  theme(strip.text = element_text(size = axis_title_size),
+        axis.title = element_text(size = axis_title_size),
+        axis.text = element_text(size = axis_text_size),
+        plot.margin = margin(t = 0, r = 20, b = 0, l = 0, unit = "pt")) 
+
+
+dat3 <- dat2 %>% 
+  group_by(tail) %>% 
+  arrange(dev)  %>%
+  mutate(row = row_number(),
+         icdf = 1 - row/n(),
+         log_icdf = log(icdf)) %>%
+  filter(is.finite(log_icdf))
+
+# view data to obtain line segment data
+#dat3 %>% arrange(tail, dev) %>% View()
+  
+# line segment data
+df_seg<-data.frame(x=69.0823328, y=-2.099402284,
+                   xend=287.0823328,yend=-5.533389489,
+                      tail = "Left tail")
+
+S4 <- dat3 %>% 
+  ggplot(aes(x = dev, y = log_icdf)) + 
+  geom_point() +
+  facet_wrap(~tail) + 
+  xlab("Absolute deviation from mean") + 
+  ylab("Log( inverse eCDF )") + 
+  theme(strip.text = element_text(size = axis_title_size),
+        axis.title = element_text(size = axis_title_size),
+        axis.text = element_text(size = axis_text_size),
+        plot.margin = margin(t = 0, r = 20, b = 0, l = 0, unit = "pt")) 
+
+
+df_line <- tibble(slope = -2, intercept = seq(-20.5, 30.5, by = 1))
+
+S5 <- dat3 %>% 
+  ggplot(aes(x = log_dev, y = log_icdf)) + 
+  geom_point() +
+  facet_wrap(~tail) + 
+  xlim(-5,2) + 
+  xlab("Log( absolute deviation from mean )") + 
+  ylab("Log( inverse eCDF )") + 
+  theme_bw() + 
+  theme(strip.text = element_text(size = axis_title_size),
+        axis.title = element_text(size = axis_title_size),
+        axis.text = element_text(size = axis_text_size),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.margin = margin(t = 0, r = 20, b = 0, l = 0, unit = "pt")) + 
+  geom_abline(data = df_line,
+              mapping = aes(intercept = intercept, slope = slope),
+              inherit.aes = FALSE, 
+              color = "Grey",
+              alpha = 0.9)
+
+
+# make tiffs
+tiff(here("figures/figS3.tiff"), units="in", width=10, height=7, res=500)
+S3
+dev.off()
+
+tiff(here("figures/figS4.tiff"), units="in", width=15, height=7.5, res=500)
+S4
+dev.off()
+
+tiff(here("figures/figS5.tiff"), units="in", width=15, height=7.5, res=500)
+S5
+dev.off()
+
+# make pngs
+png(here("figures/figS3.png"), units="in", width=10, height=7, res=500)
+S3
+dev.off()
+
+png(here("figures/figS4.png"), units="in", width=15, height=7.5, res=500)
+S4
+dev.off()
+
+png(here("figures/figS5.png"), units="in", width=15, height=7.5, res=500)
+S5
+dev.off()
+
+```

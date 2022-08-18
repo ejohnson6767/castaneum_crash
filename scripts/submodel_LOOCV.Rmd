@@ -1,0 +1,153 @@
+# load packages and data
+```{r}
+library(here)
+library(tidyverse)
+library(loo)
+library(rstan)
+library(xtable)
+
+# read in data
+dat <- read.csv(here("all_data_castaneum_crash.csv"))
+
+```
+
+# dataset 1
+```{r}
+# number of MCMC iterations is 2000, not including warmup.
+iter <- 2000
+
+loos <- list()
+for(i in 1:11)
+{
+  sfit <- readRDS(file = here(paste0("model_fits/sfit", i, "_D1.rds")))
+  log_lik <- extract_log_lik(sfit, merge_chains = TRUE)
+  r_eff <- relative_eff(exp(log_lik), cores = 2, chain_id = rep(c(1,2), each = iter))  
+  loos[[i]] <- loo(log_lik, r_eff = r_eff, cores = 2)
+  cat(i, "done\n")
+}
+
+# save loos
+saveRDS(loos, file =  here("model_fits/loos_D1.rds"))
+# read loos if needed
+loos <- readRDS(file =  here("model_fits/loos_D1.rds"))
+
+
+
+### compare loos
+description_vec <- readRDS(file = here("models/description_vec.rds"))
+d <- as.data.frame(loo_compare(loos)) %>% select(elpd_diff, se_diff, p_loo) %>% round(2)
+description_inds <- attributes(d)$row.names %>% substr(6,7) %>% as.numeric()
+d2 <- tibble(description = description_vec[description_inds],
+            d)
+d2
+write.table(d2, file = here("model_fits/loo_table_D1.txt"), sep = ";", quote = FALSE, row.names = F)
+
+colnames(d2) <- c("Description", "$\\Delta \\widehat{elpd}$", "$SE\\left(\\Delta elpd \\right)$", "\\# Effective parameters")
+options(xtable.sanitize.text.function = function(x) {x})
+xtab  <- xtable(d2)
+align(xtab) <- c("l", "l", "p{0.05\\textwidth}", "p{0.05\\textwidth}", "p{0.05\\textwidth}")
+print(xtab,include.rownames = FALSE)
+```
+
+# dataset 2
+```{r}
+# number of MCMC iterations is 2000, not including warmup.
+iter <- 2000
+
+loos <- list()
+for(i in 1:11)
+{
+  sfit <- readRDS(file = here(paste0("model_fits/sfit", i, "_D2.rds")))
+  log_lik <- extract_log_lik(sfit, merge_chains = TRUE)
+  r_eff <- relative_eff(exp(log_lik), cores = 2, chain_id = rep(c(1,2), each = iter))  
+  loos[[i]] <- loo(log_lik, r_eff = r_eff, cores = 2)
+  cat(i, "done\n")
+}
+
+# save loos
+saveRDS(loos, file =  here("model_fits/loos_D2.rds"))
+# read loos if needed
+loos <- readRDS(file =  here("model_fits/loos_D2.rds"))
+
+
+
+### compare loos
+description_vec <- readRDS(file = here("models/description_vec.rds"))
+d <- as.data.frame(loo_compare(loos)) %>% select(elpd_diff, se_diff, p_loo) %>% round(2)
+description_inds <- attributes(d)$row.names %>% substr(6,7) %>% as.numeric()
+d2 <- tibble(description = description_vec[description_inds],
+            d)
+d2
+write.table(d2, file = here("model_fits/loo_table_D2.txt"), sep = ";", quote = FALSE, row.names = F)
+
+colnames(d2) <- c("Description", "$\\Delta \\widehat{elpd}$", "$SE\\left(\\Delta elpd \\right)$", "\\# Effective parameters")
+options(xtable.sanitize.text.function = function(x) {x})
+xtab  <- xtable(d2)
+align(xtab) <- c("l", "l", "p{0.05\\textwidth}", "p{0.05\\textwidth}", "p{0.05\\textwidth}")
+print(xtab,include.rownames = FALSE)
+```
+
+# dataset 3
+```{r}
+# number of MCMC iterations is 2000, not including warmup.
+iter <- 2000
+
+loos <- list()
+for(i in 1:11)
+{
+  sfit <- readRDS(file = here(paste0("model_fits/sfit", i, "_D3.rds")))
+  log_lik <- extract_log_lik(sfit, merge_chains = TRUE)
+  r_eff <- relative_eff(exp(log_lik), cores = 2, chain_id = rep(c(1,2), each = iter))  
+  loos[[i]] <- loo(log_lik, r_eff = r_eff, cores = 2)
+  cat(i, "done\n")
+}
+
+# save loos
+saveRDS(loos, file =  here("model_fits/loos_D3.rds"))
+# read loos if needed
+loos <- readRDS(file =  here("model_fits/loos_D3.rds"))
+
+
+
+### compare loos
+description_vec <- readRDS(file = here("models/description_vec.rds"))
+d <- as.data.frame(loo_compare(loos)) %>% select(elpd_diff, se_diff, p_loo) %>% round(2)
+description_inds <- attributes(d)$row.names %>% substr(6,7) %>% as.numeric()
+d2 <- tibble(description = description_vec[description_inds],
+            d)
+d2
+write.table(d2, file = here("model_fits/loo_table_D3.txt"), sep = ";", quote = FALSE, row.names = F)
+
+colnames(d2) <- c("Description", "$\\Delta \\widehat{elpd}$", "$SE\\left(\\Delta elpd \\right)$", "\\# Effective parameters")
+options(xtable.sanitize.text.function = function(x) {x})
+xtab  <- xtable(d2)
+align(xtab) <- c("l", "l", "p{0.05\\textwidth}", "p{0.05\\textwidth}", "p{0.05\\textwidth}")
+print(xtab,include.rownames = FALSE)
+```
+
+
+```{r}
+
+d <- as.data.frame(loo_compare(loos)) %>% select(elpd_diff, se_diff, p_loo) %>% round(2)
+description_inds <- attributes(d)$row.names %>% substr(6,7) %>% as.numeric()
+d2 <- tibble(description = description_vec[description_inds],
+            d,
+            num_pars = num_pars[description_inds]) %>%
+  relocate(num_pars, .after = 3)
+  
+d2
+
+
+# table for .docx
+#write.table(d2, file = here("analysis_v2/loo_table.txt"), sep = ";", quote = FALSE, row.names = F)
+
+# table for Latex
+colnames(d2) <- c("Description", "$\\Delta \\widehat{elpd}$", "$SE\\left(\\Delta elpd \\right)$", "\\# Effective parameters")
+options(xtable.sanitize.text.function = function(x) {x})
+xtab  <- xtable(d2)
+align(xtab) <- c("l", "l", "p{0.05\\textwidth}", "p{0.05\\textwidth}", "p{0.05\\textwidth}"")
+print(xtab,include.rownames = FALSE)
+
+
+```
+
