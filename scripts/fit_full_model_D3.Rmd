@@ -12,8 +12,8 @@ library(bayesplot)
 
 # load data and R scripts
 all_dat <- read.csv(here("all_data_castaneum_crash.csv")) %>% drop_na(nt, ntp1)
-source(here("support_functions.R")) # contains various user-defined functions, including "rnormt", random sampling from a truncated normal
-source(here("stan_utility.R")) # for MCMC diagnostics
+source(here("scripts/support_functions.R")) # contains various user-defined functions, including "rnormt", random sampling from a truncated normal
+source(here("scripts/stan_utility.R")) # for MCMC diagnostics
 
 # plotting parameters
 axis_title_size <- 24
@@ -278,6 +278,19 @@ init_pars <- tibble(
 )
 
 
+# init_pars <- tibble(
+#   mu_alpha = 16.5,
+#   beta0 = 0.01,
+#   beta1 = 8e-6,
+#   eta_alpha = 22,
+#   thresh_length = 100,
+#   gamma0 = 1200,
+#   gamma1 = 0.15,
+#   sigma_zStar = 100,
+#   epsilon_H = 0.01,
+#   theta_L = 0.91
+# )
+
 # simulation / predictive-interval parameters
 sim_reps <- 10000
 nt_max <- dat %>% select(nt) %>% max() # the biggest initial abundance in the dataset
@@ -472,10 +485,10 @@ write('
       }
       ',
         
-        here("mod1_full_D3.stan"))
+        here("models/mod1_full_D3.stan"))
 
 # compile stan model
-mod1_full_D3 <- cmdstan_model(here("mod1_full_D3.stan"))
+mod1_full_D3 <- cmdstan_model(here("models/mod1_full_D3.stan"))
 
 
 # use the posterior of the submodel (parameters: m, beta0, eta_alpha) to set the priors of the full model
@@ -534,6 +547,7 @@ mu_zStar_init <-  gamma0_init - gamma1_init*(nt)
 crash_inds <- which(dat2$crash == 1) # indexes of replicates that experienced population crashes
 zt_init[crash_inds] <- mu_zStar_init[crash_inds] + 100 # set initial eggs above what is expected; this (hopefully) sets the eggs above the die-off threshold and (hopefully) allows us to avoid falling into the regions of the (multi-modal) posterior where eta_alpha is very large. 
 
+
 # function for MCMC initialization
 initf <-function(){list(mu_alpha = mu_alpha_init,
                         beta0 = beta0_init,
@@ -550,12 +564,12 @@ initf <-function(){list(mu_alpha = mu_alpha_init,
 
 
 # MCMC params
-warmup <- 200
-iter <- 200
-chains <- 2
-cores <- 2
+warmup <- 500
+iter <- 500
+chains <- 8
+cores <- 8
 thin <- 1
-adapt_delta <- 0.8
+adapt_delta <- 0.999
 max_treedepth <- 10
 refresh <- 10
 seed <- 20
@@ -574,7 +588,7 @@ fit <- mod1_full_D3$sample(data = stan_data,
 
 # save the posterior and metadata
 sfit <- rstan::read_stan_csv(fit$output_files())
-saveRDS(sfit, file = here("model_fits/sfit_full_D3_v2.stan"))
+saveRDS(sfit, file = here("model_fits/sfit_full_D3.stan"))
 #sfit <- readRDS(file = here("model_fits/sfit_full_D3.stan"))
 ```
 
@@ -634,12 +648,12 @@ np2 %>%
 # pairs plots - explore which chains give plausible-looking posteriors
 par_names <- c("beta0", "beta1", "eta_alpha")
 par_names <- c("mu_alpha", "eta_alpha")
-par_names <- c("sigma_zStar", "thresh_length", "gamma0", "gamma1", "epsilon_H")
+par_names <- c("sigma_zStar", "thresh_length", "gamma0", "gamma1")
 x <- as.array(sfit, pars = par_names)
 mcmc_pairs(x, condition = pairs_condition(chains = list(1:8, NULL)))
 
 # select the best chain(s)
-best_chain <- 1:8
+best_chain <- 5
 
 
 ```
@@ -681,7 +695,7 @@ for(i in 1:length(par_names))
 # plot simulated data
 ```{r}
 # simulation / predictive-interval parameters
-sim_reps <- 20000
+sim_reps <- 5000
 nt_max <- dat %>% select(nt) %>% max() # the biggest initial abundance in the dataset
 x <- seq(3, round(nt_max*1.1), by = 5) # unique hypothetical initial abundances to simulate from
 N <- length(x) # number of unique hypothetical initial population abundances to simulate from

@@ -6,9 +6,7 @@ output: html_document
 
 load packages, data, and cpp functions
 ```{r}
-library(Rcpp)
 library(here)
-#sourceCpp(here("beetle_models_final_sourceCpp.cpp"))
 library(tidyverse)
 library(gtools)
 library(HDInterval)
@@ -29,7 +27,6 @@ library(tagger)
 dat <- read.csv(here("all_data_castaneum_crash.csv")) %>% drop_na(nt, ntp1)
 source(here("scripts/support_functions.R"))
 source(here("scripts/stan_utility.R"))
-rnormt(1, range = c(0,Inf), 10,1)
 
 
 # plotting params
@@ -129,7 +126,7 @@ p <- ggarrange(plotlist = gl,
   theme(plot.margin = margin(t = 40, r = 10, b = 0, l = 20, unit = "pt"))
 
 # save high quality tiff
-tiff(here("figures/fig1.tiff"), units="in", width=15, height=5, res=500)
+tiff(here("figures/fig1.tiff"), units="in", width=15, height=5, res=300)
 ggarrange(plotlist = gl,
           nrow = 1, 
           widths = c( 3, 1,3, 1, 3),
@@ -141,7 +138,7 @@ ggarrange(plotlist = gl,
 dev.off()
 
 
-png(here("figures/fig1.png"), units="in", width=15, height=5, res=500)
+png(here("figures/fig1.png"), units="in", width=15, height=5, res=300)
 ggarrange(plotlist = gl,
           nrow = 1, 
           widths = c( 3, 1,3, 1, 3),
@@ -244,7 +241,7 @@ fig2v1 <- ggarrange(fig2_panel1, fig2_panel2,
 
 # Annotate the figure by adding a common labels
 fig2v1 <- annotate_figure(fig2v1, 
-                left = textGrob("n(t+1)", rot = 90, hjust = 0, vjust = 0.5, gp = gpar(fontsize = axis.title_size)), bottom =textGrob("n(t)", hjust = 2, vjust = 0, gp = gpar(fontsize = axis_title_size)))
+                left = textGrob("n(t+1)", rot = 90, hjust = 0, vjust = 0.5, gp = gpar(fontsize = axis_title_size)), bottom =textGrob("n(t)", hjust = 2, vjust = 0, gp = gpar(fontsize = axis_title_size)))
 
 
 
@@ -268,12 +265,12 @@ blank <- grid.rect(gp=gpar(col="white"))
 fig2 <- ggarrange(fig2v1, blank, fig2v2, nrow =1, widths = c(6,0.1,4.25))
 
 # save high quality tiff
-tiff(here("figures/fig2.tiff"), units="in", width=15, height=5, res=500)
+tiff(here("figures/fig2.tiff"), units="in", width=15, height=5, res=300)
 fig2
 dev.off()
 
 # save high quality png
-png(here("figures/fig2.png"), units="in", width=15, height=5, res=500)
+png(here("figures/fig2.png"), units="in", width=15, height=5, res=300)
 fig2
 dev.off()
 ```
@@ -296,12 +293,12 @@ figure3 <- ggarrange(panel1, panel2, panel3, labels = c("(a)", "(b)", "(c)"),
 
 
 arrow_dat <- data.frame(x = 0.1, xend = 0.8, y = 1.15, yend = 1.15)
-figure3 <- figure3 + geom_segment(data = arrow_dat,
-                      aes(x=x,y=y,xend=xend,yend=yend),
-                      size = 2,
-                      arrow = arrow(length = unit(0.75,"cm")),
-                      lineend = "round",
-                      linejoin='mitre')
+# figure3 <- figure3 + geom_segment(data = arrow_dat,
+#                       aes(x=x,y=y,xend=xend,yend=yend),
+#                       size = 2,
+#                       arrow = arrow(length = unit(0.75,"cm")),
+#                       lineend = "round",
+#                       linejoin='mitre')
 
 figure3 <- annotate_figure(figure3,
                            bottom = text_grob(expression(n(t)), size = axis_title_size),
@@ -312,12 +309,12 @@ figure3
 
 
 # save high quality tiff
-tiff(here("figures/fig3.tiff"), units="in", width=18, height=6, res=500)
+tiff(here("figures/fig3.tiff"), units="in", width=18, height=6, res=300)
 figure3
 dev.off()
 
 # save high quality png
-png(here("figures/fig3.png"), units="in", width=18, height=6, res=500)
+png(here("figures/fig3.png"), units="in", width=18, height=6, res=300)
 figure3
 dev.off()
 ```
@@ -335,16 +332,14 @@ sim_stoch<- function(pars, input_dat)
   nt <- input_dat[["nt"]]
   oviposition_days <- input_dat[["oviposition_days"]]
   theta_L <- pars[["theta_L"]]
-  epsilon_H <- pars[["epsilon_H"]]
-  epsilon_L = sqrt((1-theta_L)*theta_L)
 
   N <- length(nt)
-  ft <- rbinom(N, size = nt, prob = 0.5)
-
+  # ft <- rnormt(N, range = c(0, Inf), m = nt/2, s = sqrt(nt)/2)
+  ft <- rbinom(n = N, size = nt, prob = 0.5)
   # first simulate random z_star from truncated normal dist
   mu_zStarReal <-  pars[["gamma0"]] - pars[["gamma1"]] * nt
 
-  z_star <- rnormt(N, range = c(0, Inf), m = mu_zStarReal, s = pars[["sigma_zStar"]])
+  z_star <- rnorm(N, mean = mu_zStarReal, sd = pars[["sigma_zStar"]])
   
   # calculate moments of eggs distribution
   beta = pars[["beta0"]] + pars[["beta1"]] * nt
@@ -352,13 +347,14 @@ sim_stoch<- function(pars, input_dat)
   sigma_zt = pars[["eta_alpha"]] * sqrt( (1- exp(-2 * ft * oviposition_days * beta)) / (2 * beta))
   
   #simulate eggs
-  zt <- round(rnormt(N, range = c(0, Inf), m = mu_zt, s = sigma_zt))
-
+  zt <- rnormt(N, range = c(0, Inf), m = mu_zt, s = sigma_zt)
+  #zt[which(zt < 0)] <- 0
+  
   # simulate ntp1 asdf
   mu_theta <- theta_L  - theta_L/(1 + exp(-(6/pars[["thresh_length"]]) * (zt - z_star)))
-  sigma_theta <- (epsilon_L)  -  (epsilon_L - epsilon_H)/(1 + exp(-(6/pars[["thresh_length"]]) * (zt - z_star)))
+ 
 
-  ntp1 <- round(rnormt(N, range = c(0, Inf), m = zt*mu_theta, s = sqrt(zt) * sigma_theta))
+  ntp1 <- round(rnormt(N, range = c(0, Inf), m = zt*mu_theta, s = sqrt(zt*mu_theta*(1-mu_theta))))
   #ntp1[which(ntp1 < 0)] <- 0
   
   return(ntp1)
@@ -370,7 +366,6 @@ sim_det<- function(pars, input_dat)
   nt <- input_dat[["nt"]]
   oviposition_days <- input_dat[["oviposition_days"]]
   theta_L <- pars[["theta_L"]]
-  epsilon_H <- pars[["epsilon_H"]]
   epsilon_L = sqrt((1-theta_L)*theta_L)
 
   N <- length(nt)
@@ -452,12 +447,12 @@ return(res)
 # pars <- fit_summary$summary[par_names,"mean"]
 # pars[["theta_L"]] <- 0.91
 
-sfit <- readRDS(file = here("model_fits/sfit_full_D3.stan"))
+sfit <- readRDS(file = here("model_fits/sfit_full_D3.rds"))
 par_names <-   c("mu_alpha", "beta0", "beta1", "eta_alpha", "thresh_length", "gamma0", "gamma1", "sigma_zStar")
 fit_summary <- summary(sfit, pars = par_names)
 pars <- fit_summary$summary[par_names,"mean"]
 pars[["theta_L"]] <- 0.91
-pars[["epsilon_H"]] <- 0
+# pars[["epsilon_H"]] <- 0
 
 # simulation parameters
 bifur_vec_det <- seq(11,16,0.005)
@@ -562,31 +557,30 @@ fig3_dat <- within(fig3_dat, treatment <- factor(treatment, levels = c(long_term
 # p
 # 
 # 
-# tiff(here("fig4.tiff"), units="in", width=10, height=10, res=500)
-# fig3_dat %>%
-#   ggplot(aes(x = mu_alpha, y = n)) +
-#   geom_point(alpha = 0.01, shape=16, size = 0.5) +
-#   facet_grid(treatment ~ stoch_factor, labeller = label_wrap_gen(width = 15)) + 
-#   xlab(TeX("Oviposition rate $\\left(\\frac{eggs}{day}\\right)$")) +
-#   ylab("Population abundance") +
-#   theme_bw() + 
-#   theme(panel.grid.major = element_blank(),
-#         panel.grid.minor = element_blank(),
-#         axis.text = element_text(size = axis_text_size),
-#         strip.text = element_text(size = axis_title_size, vjust = 1), 
-#         axis.title.x = element_text(size = axis_title_size),
-#         axis.title.y = element_text(size = axis_title_size)) +
-#   tag_facets(tag_prefix = "(") + 
-#   theme(tagger.panel.tag.background = element_rect(fill = "White"))
-# dev.off()
 
-png(here("figures/fig4.png"), units="in", width=10, height=10, res=500)
+tiff(here("figures/fig4.tiff"), units="in", width=10, height=10, res=300)
+fig3_dat %>%
+  ggplot(aes(x = mu_alpha, y = n)) +
+  geom_point(alpha = 0.01, shape=16, size = 0.5) +
+  facet_grid(treatment ~ stoch_factor, labeller = label_wrap_gen(width = 15)) +
+  xlab(TeX("Oviposition rate, $\\alpha \\; \\left(eggs \\times female^{-1} \\times day^{-1}\\right)$")) +          ylab("Population abundance") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(size = axis_text_size),
+        strip.text = element_text(size = axis_title_size, vjust = 1),
+        axis.title.x = element_text(size = axis_title_size),
+        axis.title.y = element_text(size = axis_title_size)) +
+  tag_facets(tag_prefix = "(") +
+  theme(tagger.panel.tag.background = element_rect(fill = "White"))
+dev.off()
+
+png(here("figures/fig4.png"), units="in", width=10, height=10, res=300)
 fig3_dat %>%
   ggplot(aes(x = mu_alpha, y = n)) +
   geom_point(alpha = 0.01, shape=16, size = 0.5) +
   facet_grid(treatment ~ stoch_factor, labeller = label_wrap_gen(width = 15)) + 
-  xlab(TeX("Oviposition rate $\\left(\\frac{eggs}{day}\\right)$")) +
-  ylab("Population abundance") +
+  xlab(TeX("Oviposition rate, $\\alpha \\; \\left(eggs \\times female^{-1} \\times day^{-1}\\right)$")) +         ylab("Population abundance") +
   theme_bw() + 
   theme(panel.grid.major = element_blank(),
         panel.grid.minor = element_blank(),
@@ -597,6 +591,12 @@ fig3_dat %>%
   tag_facets(tag_prefix = "(") + 
   theme(tagger.panel.tag.background = element_rect(fill = "White"))
 dev.off()
+
+# tibble(x = rnorm(10)) %>%
+#   ggplot(aes(x = x)) + 
+#   geom_histogram() + 
+#   xlab(TeX("Oviposition rate, $\\alpha \\; \\left(eggs \\times female^{-1} \\times day^{-1}\\right)$"))
+
 
 ```
 
@@ -690,7 +690,7 @@ ggarrange(plotlist = gl,
   theme(plot.margin = margin(t = 40, r = 10, b = 0, l = 20, unit = "pt"))
 
 # save high quality tiff
-tiff(here("figures/fig5.tiff"), units="in", width=15, height=5, res=500)
+tiff(here("figures/fig5.tiff"), units="in", width=15, height=5, res=300)
 ggarrange(plotlist = gl,
           nrow = 1, 
           labels = c("(a)", "(b)", "(c)"),
@@ -701,7 +701,7 @@ ggarrange(plotlist = gl,
 dev.off()
 
 # save high quality png
-png(here("figures/fig5.png"), units="in", width=15, height=5, res=500)
+png(here("figures/fig5.png"), units="in", width=15, height=5, res=300)
 ggarrange(plotlist = gl,
           nrow = 1, 
           labels = c("(a)", "(b)", "(c)"),
@@ -745,12 +745,12 @@ S1 <- dat6 %>%
   labs(color = "Oviposition period \n(Days)")
 
 # save high quality tiff
-tiff(here("figures/figS1.tiff"), units="in", width=10, height=7, res=500)
+tiff(here("figures/figS1.tiff"), units="in", width=10, height=7, res=300)
 S1
 dev.off()
 
 # save high quality png
-png(here("figures/figS1.png"), units="in", width=10, height=7, res=500)
+png(here("figures/figS1.png"), units="in", width=10, height=7, res=300)
 S1
 dev.off()
 
@@ -829,12 +829,12 @@ bottom_panel <- dat2 %>%
 figS2 <- ggarrange(top_panel, bottom_panel, nrow = 2, align = "hv")
 
 # save high quality tiff
-tiff(here("figures/figS2.tiff"), units="in", width=10, height=10, res=500)
+tiff(here("figures/figS2.tiff"), units="in", width=10, height=10, res=300)
 figS2
 dev.off()
 
 # save high quality png
-png(here("figures/figS2.png"), units="in", width=10, height=10, res=500)
+png(here("figures/figS2.png"), units="in", width=10, height=10, res=300)
 figS2
 dev.off()
 ```
@@ -921,28 +921,28 @@ S5 <- dat3 %>%
 
 
 # make tiffs
-tiff(here("figures/figS3.tiff"), units="in", width=10, height=7, res=500)
+tiff(here("figures/figS3.tiff"), units="in", width=10, height=7, res=300)
 S3
 dev.off()
 
-tiff(here("figures/figS4.tiff"), units="in", width=15, height=7.5, res=500)
+tiff(here("figures/figS4.tiff"), units="in", width=15, height=7.5, res=300)
 S4
 dev.off()
 
-tiff(here("figures/figS5.tiff"), units="in", width=15, height=7.5, res=500)
+tiff(here("figures/figS5.tiff"), units="in", width=15, height=7.5, res=300)
 S5
 dev.off()
 
 # make pngs
-png(here("figures/figS3.png"), units="in", width=10, height=7, res=500)
+png(here("figures/figS3.png"), units="in", width=10, height=7, res=300)
 S3
 dev.off()
 
-png(here("figures/figS4.png"), units="in", width=15, height=7.5, res=500)
+png(here("figures/figS4.png"), units="in", width=15, height=7.5, res=300)
 S4
 dev.off()
 
-png(here("figures/figS5.png"), units="in", width=15, height=7.5, res=500)
+png(here("figures/figS5.png"), units="in", width=15, height=7.5, res=300)
 S5
 dev.off()
 
